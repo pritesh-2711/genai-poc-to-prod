@@ -1,0 +1,32 @@
+app:
+  name: "Research Paper Chat"
+  version: "1.0.0"
+  debug: false
+
+llm:
+  # Provider options: "ollama", "openai"
+  provider: "ollama"
+  
+  # Ollama configuration
+  ollama:
+    model: "mistral:7b"
+    base_url: "http://localhost:11434"
+    temperature: 0.7
+    top_p: 0.9
+  
+  # OpenAI configuration
+  openai:
+    model: "gpt-4"
+    api_key: "${OPENAI_API_KEY}"
+    temperature: 0.7
+    max_tokens: 2000
+
+chat:
+  system_prompt: "You are a helpful AI assistant specialized in discussing and analyzing research papers. Provide clear, accurate, and insightful responses."
+  max_history: 10
+  timeout: 30
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/app.log"
