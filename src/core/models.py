@@ -30,5 +30,4 @@ class ChatConfig:
     """Configuration for chat service."""
 
     system_prompt: str
-    max_history: int = 10
-    timeout: int = 30
+    timeout: int = 60

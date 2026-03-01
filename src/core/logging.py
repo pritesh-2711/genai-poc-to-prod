@@ -44,7 +44,7 @@ class LoggingManager:
 
             logging.config.dictConfig(config)
             cls._initialized = True
-            return logging.getLogger("research_paper_chat")
+            return logging.getLogger("chat")
 
         except yaml.YAMLError as e:
             raise ConfigurationError(f"Failed to parse logging configuration: {e}")

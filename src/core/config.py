@@ -29,6 +29,7 @@ class ConfigManager:
         self.config = self._load_config()
         self.llm_config = self._build_llm_config()
         self.chat_config = self._build_chat_config()
+        self._load_env_variables()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -81,7 +82,7 @@ class ConfigManager:
 
         return LLMConfig(
             provider=provider,
-            model=provider_config.get("model", "mistral:7b" if provider == "ollama" else "gpt-4"),
+            model=provider_config.get("model", "mistral:7b" if provider == "ollama" else "gpt-4.1-nano"),
             temperature=provider_config.get("temperature", 0.7),
             max_tokens=provider_config.get("max_tokens"),
             api_key=self._resolve_env_vars(provider_config.get("api_key")),
@@ -97,7 +98,6 @@ class ConfigManager:
         chat_config = self.config.get("chat", {})
         return ChatConfig(
             system_prompt=chat_config.get("system_prompt", "You are a helpful assistant."),
-            max_history=chat_config.get("max_history", 10),
             timeout=chat_config.get("timeout", 30),
         )
 
@@ -121,3 +121,13 @@ class ConfigManager:
                 return default
 
         return value
+    
+    def _load_env_variables(self) -> None:
+        """Load environment variables for configuration."""
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            raise ConfigurationError("python-dotenv is required to load environment variables. Please install it with 'pip install python-dotenv'.")
+        except Exception as e:
+            raise ConfigurationError(f"Failed to load environment variables: {e}")
