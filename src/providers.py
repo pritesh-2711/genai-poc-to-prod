@@ -6,10 +6,10 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama as LangChainChatOllama
 from langchain_openai import ChatOpenAI as LangChainChatOpenAI
 
-from ..core.logging import LoggingManager
-from ..core.models import ChatMessage
-from .exceptions import LLMInitializationError, LLMProviderError
-from .llm import BaseLLMProvider
+from .core.logging import LoggingManager
+from .core.models import ChatMessage
+from .core.exceptions import LLMInitializationError, LLMProviderError
+from .core.llm import BaseLLMProvider
 
 logger = LoggingManager.get_logger(__name__)
 

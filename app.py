@@ -44,7 +44,7 @@ async def on_chat_start():
         await cl.Message(content=f"Error initializing chat: {str(e)}").send()
 
 
-@cl.message_handler
+@cl.on_message
 async def handle_message(message: cl.Message):
     """Handle incoming messages from the user."""
     global chat_service
@@ -67,7 +67,7 @@ async def handle_message(message: cl.Message):
         await cl.Message(content=f"Error processing your message: {str(e)}").send()
 
 
-@cl.on_session_end
+@cl.on_chat_end
 async def on_session_end():
     """Handle session end."""
     global chat_service
