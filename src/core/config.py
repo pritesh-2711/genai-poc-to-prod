@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yaml
 
 from .exceptions import ConfigurationError
-from .models import ChatConfig, LLMConfig
+from .models import ChatConfig, DBConfig, LLMConfig
 
 
 class ConfigManager:
@@ -26,10 +26,11 @@ class ConfigManager:
         if not self.config_path.exists():
             raise ConfigurationError(f"Configuration file not found: {config_path}")
 
+        self._load_env_variables()
         self.config = self._load_config()
         self.llm_config = self._build_llm_config()
         self.chat_config = self._build_chat_config()
-        self._load_env_variables()
+        self.db_config = self._build_db_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -101,6 +102,31 @@ class ConfigManager:
             timeout=chat_config.get("timeout", 30),
         )
 
+    def _build_db_config(self) -> DBConfig:
+        """Build database configuration from config file and environment variables.
+
+        Returns:
+            DBConfig object.
+
+        Raises:
+            ConfigurationError: If required DB config is missing.
+        """
+        db_config = self.config.get("database", {})
+
+        host = self._resolve_env_vars(db_config.get("host", "${DB_HOST}"))
+        port = int(self._resolve_env_vars(str(db_config.get("port", "${DB_PORT}"))))
+        database = self._resolve_env_vars(db_config.get("database", "${DB_NAME}"))
+        user = self._resolve_env_vars(db_config.get("user", "${DB_USER}"))
+        password = self._resolve_env_vars(db_config.get("password", "${DB_PASSWORD}"))
+
+        return DBConfig(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+        )
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value by dot-separated key.
 
@@ -121,13 +147,15 @@ class ConfigManager:
                 return default
 
         return value
-    
+
     def _load_env_variables(self) -> None:
         """Load environment variables for configuration."""
         try:
             from dotenv import load_dotenv
             load_dotenv()
         except ImportError:
-            raise ConfigurationError("python-dotenv is required to load environment variables. Please install it with 'pip install python-dotenv'.")
+            raise ConfigurationError(
+                "python-dotenv is required. Install it with 'pip install python-dotenv'."
+            )
         except Exception as e:
             raise ConfigurationError(f"Failed to load environment variables: {e}")

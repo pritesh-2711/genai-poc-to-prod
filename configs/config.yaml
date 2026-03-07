@@ -6,14 +6,14 @@ app:
 llm:
   # Provider options: "ollama", "openai"
   provider: "ollama"
-  
+
   # Ollama configuration
   ollama:
     model: "mistral:7b"
     base_url: "http://localhost:11434"
     temperature: 0.7
     top_p: 0.9
-  
+
   # OpenAI configuration
   openai:
     model: "gpt-4.1-mini"
@@ -24,6 +24,15 @@ llm:
 chat:
   system_prompt: "You are a helpful AI assistant specialized in discussing and analyzing research papers. Provide clear, accurate, and insightful responses."
   timeout: 60
+
+# PostgreSQL connection — values can be overridden via environment variables.
+# Set the corresponding env vars in your .env file for secrets.
+database:
+  host: "${DB_HOST}"
+  port: "${DB_PORT}"
+  database: "${DB_NAME}"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
 
 logging:
   level: "INFO"
