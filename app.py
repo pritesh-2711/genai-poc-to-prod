@@ -17,18 +17,13 @@ config_manager = ConfigManager()
 # ---------------------------------------------------------------------------
 
 def _session_label(session) -> str:
-    """Return a short display label for a session."""
     ts = session.created_at.strftime("%b %d, %H:%M")
     status = "" if session.is_active else " [ended]"
     return f"{session.session_name}{status} ({ts})"
 
 
 async def _render_sessions_panel(repo: MemoryRepository, user_id, active_session_id) -> None:
-    """Send an updated sessions panel as a single message with action buttons.
-
-    Each session is presented as a clickable action. The active one is marked.
-    Two extra actions are shown: 'New session' and 'End current session'.
-    """
+    """Send a sessions panel with one action button per session."""
     sessions = repo.get_sessions(user_id)
 
     actions = []
@@ -38,13 +33,13 @@ async def _render_sessions_panel(repo: MemoryRepository, user_id, active_session
         actions.append(
             cl.Action(
                 name="switch_session",
-                value=str(s.session_id),
                 label=f"{label}{marker}",
+                payload={"session_id": str(s.session_id)},
             )
         )
 
-    actions.append(cl.Action(name="new_session", value="new", label="+ New session"))
-    actions.append(cl.Action(name="end_session", value="end", label="End current session"))
+    actions.append(cl.Action(name="new_session", label="+ New session", payload={}))
+    actions.append(cl.Action(name="end_session", label="End current session", payload={}))
 
     await cl.Message(
         content="**Sessions** — click to switch:",
@@ -53,7 +48,7 @@ async def _render_sessions_panel(repo: MemoryRepository, user_id, active_session
 
 
 async def _load_and_display_history(repo: MemoryRepository, session_id) -> None:
-    """Fetch history for a session and replay it into the chat UI."""
+    """Replay existing messages for a session into the chat view."""
     history = repo.get_conversation_history(session_id)
     if not history:
         await cl.Message(content="_No messages in this session yet._").send()
@@ -70,10 +65,10 @@ async def _load_and_display_history(repo: MemoryRepository, session_id) -> None:
 
 @cl.password_auth_callback
 def auth_callback(username: str, password: str):
-    """Authenticate the user against the database.
+    """Authenticate against the database.
 
-    Chainlit calls this with the credentials from its built-in login form.
-    Return a cl.User on success or None on failure.
+    Chainlit passes the login form values here. Return cl.User on success,
+    None on failure.
     """
     repo = MemoryRepository(config_manager.db_config)
     try:
@@ -97,7 +92,7 @@ def auth_callback(username: str, password: str):
 
 @cl.on_chat_start
 async def on_chat_start():
-    """Set up the session on first load after login."""
+    """Initialise repo, chat service, and active session after login."""
     cl_user = cl.user_session.get("user")
     user_id = cl_user.identifier
     user_name = cl_user.metadata.get("name", "there")
@@ -108,12 +103,11 @@ async def on_chat_start():
         chat_config=config_manager.chat_config,
     )
 
-    # Store service objects in the Chainlit user session
     cl.user_session.set("repo", repo)
     cl.user_session.set("chat_service", chat_service)
     cl.user_session.set("user_id", user_id)
 
-    # Pick the most recent active session or create one
+    # Resume the most recent active session or start a new one
     sessions = repo.get_sessions(user_id)
     active_sessions = [s for s in sessions if s.is_active]
 
@@ -134,14 +128,12 @@ async def on_chat_start():
     ).send()
 
     await _render_sessions_panel(repo, user_id, active_session.session_id)
-
-    # Replay existing history so the user sees prior messages
     await _load_and_display_history(repo, active_session.session_id)
 
 
 @cl.on_message
 async def handle_message(message: cl.Message):
-    """Handle a user message: persist, fetch history, get LLM response, persist."""
+    """Persist user message, fetch history, call LLM, persist response."""
     repo: MemoryRepository = cl.user_session.get("repo")
     chat_service: ChatService = cl.user_session.get("chat_service")
     session_id = cl.user_session.get("active_session_id")
@@ -154,21 +146,17 @@ async def handle_message(message: cl.Message):
     if not user_message:
         return
 
-    # Persist user message
     repo.add_message(session_id, "user", user_message)
 
-    # Fetch full conversation history to provide as context
+    # Fetch full history; exclude the message just added — it's passed as user_message
     history = repo.get_conversation_history(session_id)
-    # Exclude the message we just added — it will be passed as user_message
     context_history = history[:-1] if history else []
 
-    # Get response from LLM with history context
     response = await chat_service.get_response_async(
         user_message=user_message,
         history=context_history,
     )
 
-    # Persist assistant response
     repo.add_message(session_id, "assistant", response)
 
     await cl.Message(content=response).send()
@@ -181,10 +169,9 @@ async def handle_message(message: cl.Message):
 
 @cl.action_callback("switch_session")
 async def on_switch_session(action: cl.Action):
-    """Switch the active session."""
     repo: MemoryRepository = cl.user_session.get("repo")
     user_id = cl.user_session.get("user_id")
-    new_session_id = action.value
+    new_session_id = action.payload["session_id"]
 
     cl.user_session.set("active_session_id", new_session_id)
 
@@ -193,17 +180,12 @@ async def on_switch_session(action: cl.Action):
     label = selected.session_name if selected else new_session_id
 
     await cl.Message(content=f"Switched to session: **{label}**").send()
-
-    # Refresh the sessions panel to reflect the new active marker
     await _render_sessions_panel(repo, user_id, new_session_id)
-
-    # Show history for the newly selected session
     await _load_and_display_history(repo, new_session_id)
 
 
 @cl.action_callback("new_session")
 async def on_new_session(action: cl.Action):
-    """Create a new session and switch to it."""
     repo: MemoryRepository = cl.user_session.get("repo")
     user_id = cl.user_session.get("user_id")
 
@@ -219,7 +201,6 @@ async def on_new_session(action: cl.Action):
 
 @cl.action_callback("end_session")
 async def on_end_session(action: cl.Action):
-    """Mark the current session as inactive and start a new one."""
     repo: MemoryRepository = cl.user_session.get("repo")
     user_id = cl.user_session.get("user_id")
     session_id = cl.user_session.get("active_session_id")
@@ -240,7 +221,6 @@ async def on_end_session(action: cl.Action):
 
 @cl.on_chat_end
 async def on_chat_end():
-    """Clean up on disconnect."""
     cl.user_session.set("repo", None)
     cl.user_session.set("chat_service", None)
     logger.info("Chat session ended.")

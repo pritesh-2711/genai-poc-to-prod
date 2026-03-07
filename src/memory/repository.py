@@ -48,7 +48,7 @@ class MemoryRepository:
     # ------------------------------------------------------------------
 
     def authenticate_user(self, email: str, password: str) -> UserRecord:
-        """Verify credentials and return the user record.
+        """Verify credentials, update last_login_at, and return the user record.
 
         Args:
             email: User email address.
@@ -69,18 +69,32 @@ class MemoryRepository:
                 (email,),
             )
             row = cur.fetchone()
-            cur.close()
-            conn.close()
         except Exception as e:
             logger.error(f"DB error during authentication: {e}")
             raise MemoryRepositoryError(f"Database error: {e}")
 
         if row is None:
+            cur.close()
+            conn.close()
             raise AuthenticationError("Invalid email or password.")
 
-        stored_hash = row["password"]
-        if not bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8")):
+        if not bcrypt.checkpw(password.encode("utf-8"), row["password"].encode("utf-8")):
+            cur.close()
+            conn.close()
             raise AuthenticationError("Invalid email or password.")
+
+        # Update last_login_at on successful login
+        try:
+            cur.execute(
+                "UPDATE memory.users SET last_login_at = CURRENT_TIMESTAMP WHERE user_id = %s;",
+                (str(row["user_id"]),),
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to update last_login_at for {email}: {e}")
+        finally:
+            cur.close()
+            conn.close()
 
         logger.info(f"User authenticated: {email}")
         return UserRecord(
@@ -95,17 +109,7 @@ class MemoryRepository:
     # ------------------------------------------------------------------
 
     def get_sessions(self, user_id: uuid.UUID) -> List[SessionRecord]:
-        """Return all sessions for a user, newest first.
-
-        Args:
-            user_id: UUID of the user.
-
-        Returns:
-            List of SessionRecord objects.
-
-        Raises:
-            MemoryRepositoryError: On database error.
-        """
+        """Return all sessions for a user, newest first."""
         try:
             conn = self._connect()
             cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -137,18 +141,7 @@ class MemoryRepository:
         ]
 
     def create_session(self, user_id: uuid.UUID, session_name: str) -> SessionRecord:
-        """Create a new session for a user.
-
-        Args:
-            user_id: UUID of the user.
-            session_name: Display name for the session.
-
-        Returns:
-            The newly created SessionRecord.
-
-        Raises:
-            MemoryRepositoryError: On database error.
-        """
+        """Create a new session for a user."""
         try:
             conn = self._connect()
             cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -178,19 +171,16 @@ class MemoryRepository:
         )
 
     def terminate_session(self, session_id: uuid.UUID) -> None:
-        """Mark a session as inactive.
-
-        Args:
-            session_id: UUID of the session to terminate.
-
-        Raises:
-            MemoryRepositoryError: On database error.
-        """
+        """Mark a session as inactive and stamp terminated_at."""
         try:
             conn = self._connect()
             cur = conn.cursor()
             cur.execute(
-                "UPDATE memory.sessions SET is_active = FALSE WHERE session_id = %s;",
+                """
+                UPDATE memory.sessions
+                SET is_active = FALSE, terminated_at = CURRENT_TIMESTAMP
+                WHERE session_id = %s;
+                """,
                 (str(session_id),),
             )
             conn.commit()
@@ -205,19 +195,7 @@ class MemoryRepository:
     # ------------------------------------------------------------------
 
     def add_message(self, session_id: uuid.UUID, sender: str, message: str) -> ChatRecord:
-        """Persist a chat message.
-
-        Args:
-            session_id: UUID of the session.
-            sender: Either "user" or "assistant".
-            message: Message content.
-
-        Returns:
-            The persisted ChatRecord.
-
-        Raises:
-            MemoryRepositoryError: On database error.
-        """
+        """Persist a chat message."""
         try:
             conn = self._connect()
             cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -256,9 +234,6 @@ class MemoryRepository:
 
         Returns:
             List of ChatRecord objects ordered oldest-first.
-
-        Raises:
-            MemoryRepositoryError: On database error.
         """
         try:
             conn = self._connect()
