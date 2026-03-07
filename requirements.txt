@@ -8,3 +8,5 @@ python-dotenv==1.2.1
 langchain-community==0.4.1
 langchain-text-splitters==1.1.1
 langgraph==1.0.9
+asyncpg>=0.31.0 
+psycopg2-binary>=2.9.11
