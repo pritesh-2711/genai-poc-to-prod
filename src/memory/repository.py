@@ -44,6 +44,72 @@ class MemoryRepository:
         )
 
     # ------------------------------------------------------------------
+    # Users
+    # ------------------------------------------------------------------
+
+    def create_user(self, name: str, email: str, password: str) -> UserRecord:
+        """Hash the password and insert a new user row.
+
+        Raises:
+            ValueError: If the email address is already registered.
+            MemoryRepositoryError: On any database error.
+        """
+        hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        try:
+            conn = self._connect()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                """
+                INSERT INTO memory.users (name, email, password)
+                VALUES (%s, %s, %s)
+                RETURNING user_id, name, email, created_at;
+                """,
+                (name, email, hashed),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            cur.close()
+            conn.close()
+        except psycopg2.errors.UniqueViolation:
+            raise ValueError(f"An account with email '{email}' already exists.")
+        except Exception as e:
+            logger.error(f"DB error creating user: {e}")
+            raise MemoryRepositoryError(f"Database error: {e}")
+
+        logger.info(f"User created: {email}")
+        return UserRecord(
+            user_id=row["user_id"],
+            name=row["name"],
+            email=row["email"],
+            created_at=row["created_at"],
+        )
+
+    def get_user_by_id(self, user_id: uuid.UUID) -> Optional[UserRecord]:
+        """Return a UserRecord by primary key, or None if not found."""
+        try:
+            conn = self._connect()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                "SELECT user_id, name, email, created_at FROM memory.users WHERE user_id = %s;",
+                (str(user_id),),
+            )
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logger.error(f"DB error fetching user by id: {e}")
+            raise MemoryRepositoryError(f"Database error: {e}")
+
+        if row is None:
+            return None
+        return UserRecord(
+            user_id=row["user_id"],
+            name=row["name"],
+            email=row["email"],
+            created_at=row["created_at"],
+        )
+
+    # ------------------------------------------------------------------
     # Authentication
     # ------------------------------------------------------------------
 
@@ -188,6 +254,28 @@ class MemoryRepository:
             conn.close()
         except Exception as e:
             logger.error(f"DB error terminating session: {e}")
+            raise MemoryRepositoryError(f"Database error: {e}")
+
+    def delete_session(self, session_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Hard-delete a session row (CASCADE removes its chats too).
+
+        The user_id check ensures a user can only delete their own sessions.
+        """
+        try:
+            conn = self._connect()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                DELETE FROM memory.sessions
+                WHERE session_id = %s AND user_id = %s;
+                """,
+                (str(session_id), str(user_id)),
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logger.error(f"DB error deleting session: {e}")
             raise MemoryRepositoryError(f"Database error: {e}")
 
     # ------------------------------------------------------------------
