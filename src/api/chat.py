@@ -11,7 +11,6 @@ The POST endpoint runs the full cycle in one call:
   5. Return both records to the frontend
 """
 
-import asyncio
 from typing import Annotated, List
 from uuid import UUID
 
@@ -58,41 +57,34 @@ def get_messages(
     response_model=SendMessageResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def send_message(
+async def send_message(
     session_id: UUID,
     body: SendMessageRequest,
     _current_user: Annotated[UserRecord, Depends(get_current_user)],
     repo: Annotated[MemoryRepository, Depends(get_repo)],
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
 ):
-    """Persist the user's message, get an LLM response, and return both.
+    """Persist the user message, get an async LLM response, return both records.
 
-    Uses ChatService.get_response_async internally. FastAPI runs sync endpoints
-    in a thread pool, so we use asyncio.run to call the async method from a
-    synchronous context without blocking the event loop.
+    The route is async so we can await get_response_async directly without
+    spawning a new event loop (which was the cause of the 'Event loop is closed'
+    502 errors when this was a sync def using asyncio.run).
     """
     try:
-        # 1. Store user message
         user_record = repo.add_message(
             session_id=session_id,
             sender="user",
             message=body.message,
         )
 
-        # 2. Fetch history (excluding the message we just added — it's already
-        #    the last entry, so slice to exclude it for the context prompt)
         history = repo.get_conversation_history(session_id=session_id)
-        context_history = history[:-1]  # same pattern as app.py
+        context_history = history[:-1]
 
-        # 3. Get LLM response (call async from sync endpoint via asyncio.run)
-        assistant_text = asyncio.run(
-            chat_service.get_response_async(
-                user_message=body.message,
-                history=context_history,
-            )
+        assistant_text = await chat_service.get_response_async(
+            user_message=body.message,
+            history=context_history,
         )
 
-        # 4. Store assistant reply
         assistant_record = repo.add_message(
             session_id=session_id,
             sender="assistant",
