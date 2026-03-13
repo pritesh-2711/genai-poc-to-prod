@@ -1,18 +1,9 @@
 """Data models for the application."""
 
 from dataclasses import dataclass
-from typing import Optional
 from datetime import datetime
+from typing import Optional
 import uuid
-
-
-@dataclass
-class ChatMessage:
-    """Represents a chat message."""
-
-    role: str  # "user" or "assistant"
-    content: str
-    metadata: Optional[dict] = None
 
 
 @dataclass
@@ -65,6 +56,7 @@ class SessionRecord:
     session_name: str
     is_active: bool
     created_at: datetime
+    terminated_at: Optional[datetime] = None
 
 
 @dataclass

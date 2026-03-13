@@ -2,18 +2,19 @@
 
 Provides:
 - ConfigManager singleton (loaded once at startup)
-- MemoryRepository factory (lightweight — new instance per request)
 - ChatService singleton (LLM provider is expensive to initialise)
 - JWT token creation and verification
 - get_current_user — resolves a Bearer token to a UserRecord
+- Singletons (ConfigManager, ChatService) are initialised once in the lifespan
+  context manager in main.py and stored on app.state. Per-request dependencies
+- (MemoryRepository, get_current_user) are plain functions resolved by FastAPI.
 """
 
 import os
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from jose import JWTError, jwt
@@ -34,35 +35,24 @@ bearer_scheme = HTTPBearer()
 
 
 # ---------------------------------------------------------------------------
-# Singletons
+# app.state accessors — called by per-request dependencies
 # ---------------------------------------------------------------------------
 
-@lru_cache(maxsize=1)
-def get_config() -> ConfigManager:
-    """Load and cache the ConfigManager once per process."""
-    return ConfigManager()
+def get_config(request: Request) -> ConfigManager:
+    return request.app.state.config
 
 
-@lru_cache(maxsize=1)
-def get_chat_service() -> ChatService:
-    """Create and cache the ChatService (LLM provider) once per process."""
-    cfg = get_config()
-    return ChatService(llm_config=cfg.llm_config, chat_config=cfg.chat_config)
+def get_chat_service(request: Request) -> ChatService:
+    return request.app.state.chat_service
 
 
 # ---------------------------------------------------------------------------
 # Per-request dependencies
 # ---------------------------------------------------------------------------
 
-def get_repo() -> MemoryRepository:
-    """Return a fresh MemoryRepository for each request.
-
-    MemoryRepository opens and closes its own psycopg2 connection per call,
-    so creating a new instance per request is cheap and keeps things simple
-    (consistent with the existing Chainlit usage pattern).
-    """
-    cfg = get_config()
-    return MemoryRepository(cfg.db_config)
+def get_repo(request: Request) -> MemoryRepository:
+    """Return a fresh MemoryRepository for each request."""
+    return MemoryRepository(request.app.state.config.db_config)
 
 
 # ---------------------------------------------------------------------------
