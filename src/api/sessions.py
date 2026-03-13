@@ -1,8 +1,8 @@
 """Session management endpoints.
 
-GET    /sessions                   — list all sessions for the current user
-POST   /sessions                   — create a new session
-DELETE /sessions/{session_id}      — hard-delete a session (and its messages)
+GET    /sessions                        — list all sessions for the current user
+POST   /sessions                        — create a new session
+DELETE /sessions/{session_id}           — hard-delete a session and its messages
 POST   /sessions/{session_id}/terminate — soft-terminate (mark inactive)
 """
 
@@ -26,7 +26,7 @@ def _to_session_response(s) -> SessionResponse:
         session_name=s.session_name,
         is_active=s.is_active,
         created_at=s.created_at,
-        terminated_at=getattr(s, "terminated_at", None),
+        terminated_at=s.terminated_at,
     )
 
 
@@ -66,10 +66,7 @@ def delete_session(
     current_user: Annotated[UserRecord, Depends(get_current_user)],
     repo: Annotated[MemoryRepository, Depends(get_repo)],
 ):
-    """Hard-delete a session and all its messages (CASCADE).
-
-    Used by the frontend to clean up empty sessions created but never used.
-    """
+    """Hard-delete a session and all its messages (CASCADE)."""
     try:
         repo.delete_session(session_id=session_id, user_id=current_user.user_id)
     except MemoryRepositoryError as e:
@@ -83,10 +80,7 @@ def terminate_session(
     current_user: Annotated[UserRecord, Depends(get_current_user)],
     repo: Annotated[MemoryRepository, Depends(get_repo)],
 ):
-    """Soft-terminate a session (sets is_active=False, stamps terminated_at).
-
-    The session and its messages are preserved — use DELETE to remove entirely.
-    """
+    """Soft-terminate a session (sets is_active=False, stamps terminated_at)."""
     try:
         repo.terminate_session(session_id=session_id)
     except MemoryRepositoryError as e:
