@@ -210,3 +210,7 @@ __marimo__/
 # UI
 *.chainlit/
 .chainlit/
+
+# Evaluation metrics
+*.evals/
+*.deepeval/
