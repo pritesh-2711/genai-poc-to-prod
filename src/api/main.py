@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..chat_service import ChatService
 from ..core.config import ConfigManager
+from ..guardrails import InputGuard
 from .auth import router as auth_router
 from .chat import router as chat_router
 from .sessions import router as sessions_router
@@ -34,9 +35,15 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger(__name__)
 
     config = ConfigManager()
+
+    input_guard = None
+    if config.guardrails_config.enabled:
+        input_guard = InputGuard(config.guardrails_config)
+
     chat_service = ChatService(
         llm_config=config.llm_config,
         chat_config=config.chat_config,
+        input_guard=input_guard,
     )
 
     app.state.config = config
