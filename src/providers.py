@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama as LangChainChatOllama
 from langchain_openai import ChatOpenAI as LangChainChatOpenAI
 
@@ -39,11 +39,8 @@ class OllamaProvider(BaseLLMProvider):
 
     def chat(self, user_message: str, system_prompt: str, **kwargs) -> str:
         try:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", user_message),
-            ])
-            response = (prompt | self.llm).invoke({})
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+            response = self.llm.invoke(messages)
             logger.debug("Generated response from Ollama")
             return response.content
         except Exception as e:
@@ -52,11 +49,8 @@ class OllamaProvider(BaseLLMProvider):
 
     async def achat(self, user_message: str, system_prompt: str, **kwargs) -> str:
         try:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", user_message),
-            ])
-            response = await (prompt | self.llm).ainvoke({})
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+            response = await self.llm.ainvoke(messages)
             logger.debug("Generated async response from Ollama")
             return response.content
         except Exception as e:
@@ -93,11 +87,8 @@ class OpenAIProvider(BaseLLMProvider):
 
     def chat(self, user_message: str, system_prompt: str, **kwargs) -> str:
         try:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", user_message),
-            ])
-            response = (prompt | self.llm).invoke({})
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+            response = self.llm.invoke(messages)
             logger.debug("Generated response from OpenAI")
             return response.content
         except Exception as e:
@@ -106,11 +97,8 @@ class OpenAIProvider(BaseLLMProvider):
 
     async def achat(self, user_message: str, system_prompt: str, **kwargs) -> str:
         try:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", user_message),
-            ])
-            response = await (prompt | self.llm).ainvoke({})
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+            response = await self.llm.ainvoke(messages)
             logger.debug("Generated async response from OpenAI")
             return response.content
         except Exception as e:

@@ -17,6 +17,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..chat_service import ChatService
+from ..core.exceptions import InputBlockedError
 from ..core.models import UserRecord
 from ..memory.repository import MemoryRepository, MemoryRepositoryError
 from .deps import get_chat_service, get_current_user, get_repo
@@ -91,6 +92,8 @@ async def send_message(
             message=assistant_text,
         )
 
+    except InputBlockedError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except MemoryRepositoryError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
