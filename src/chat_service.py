@@ -2,9 +2,10 @@
 
 from typing import List, Optional
 
-from .core.exceptions import ChatServiceError
+from .core.exceptions import ChatServiceError, InputBlockedError
 from .core.logging import LoggingManager
 from .core.models import ChatConfig, ChatRecord, LLMConfig
+from .guardrails import InputGuard
 from .providers import LLMProviderFactory, BaseLLMProvider
 
 logger = LoggingManager.get_logger(__name__)
@@ -21,6 +22,7 @@ class ChatService:
         self,
         llm_config: LLMConfig,
         chat_config: ChatConfig,
+        input_guard: Optional[InputGuard] = None,
     ):
         """Initialize the chat service.
 
@@ -34,6 +36,7 @@ class ChatService:
         try:
             self.llm_config = llm_config
             self.chat_config = chat_config
+            self.input_guard = input_guard
             self.llm_provider = self._initialize_provider()
             logger.info("ChatService initialized successfully")
 
@@ -97,6 +100,13 @@ class ChatService:
             ChatServiceError: If response generation fails.
         """
         try:
+            if self.input_guard:
+                result = self.input_guard.check(user_message)
+                if not result.passed:
+                    raise InputBlockedError(
+                        f"Message blocked by {result.violated_guard} guard."
+                    )
+
             response = self.llm_provider.chat(
                 user_message=user_message,
                 system_prompt=self._build_system_prompt(history),
@@ -104,6 +114,8 @@ class ChatService:
             logger.info("Successfully generated response")
             return response
 
+        except InputBlockedError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get response: {e}")
             raise ChatServiceError(f"Failed to generate response: {e}")
@@ -126,6 +138,13 @@ class ChatService:
             ChatServiceError: If response generation fails.
         """
         try:
+            if self.input_guard:
+                result = await self.input_guard.acheck(user_message)
+                if not result.passed:
+                    raise InputBlockedError(
+                        f"Message blocked by {result.violated_guard} guard."
+                    )
+
             response = await self.llm_provider.achat(
                 user_message=user_message,
                 system_prompt=self._build_system_prompt(history),
@@ -133,6 +152,8 @@ class ChatService:
             logger.info("Successfully generated async response")
             return response
 
+        except InputBlockedError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get async response: {e}")
             raise ChatServiceError(f"Failed to generate async response: {e}")

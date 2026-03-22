@@ -35,3 +35,13 @@ class PromptValidationError(ResearchPaperChatException):
     """Raised when prompt validation fails."""
 
     pass
+
+
+class InputBlockedError(ResearchPaperChatException):
+    """Raised when a user message is blocked by an input guardrail.
+
+    Distinct from ChatServiceError so the API layer can return HTTP 400
+    (bad request from the client) rather than HTTP 502 (LLM failure).
+    """
+
+    pass
