@@ -25,6 +25,11 @@ from .schemas import ChatMessageResponse, SendMessageRequest, SendMessageRespons
 
 router = APIRouter(tags=["chat"])
 
+_BLOCKED_REPLY = (
+    "I'm sorry, but I'm not able to respond to that message. "
+    "Please keep our conversation respectful and on-topic."
+)
+
 
 def _to_msg_response(record) -> ChatMessageResponse:
     return ChatMessageResponse(
@@ -92,8 +97,14 @@ async def send_message(
             message=assistant_text,
         )
 
-    except InputBlockedError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except InputBlockedError:
+        # User message is already persisted. Save a polite refusal and return
+        # normally so the frontend renders it as an assistant message, not an error.
+        assistant_record = repo.add_message(
+            session_id=session_id,
+            sender="assistant",
+            message=_BLOCKED_REPLY,
+        )
     except MemoryRepositoryError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
