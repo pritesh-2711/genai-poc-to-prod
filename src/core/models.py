@@ -27,6 +27,17 @@ class ChatConfig:
 
 
 @dataclass
+class GuardrailsConfig:
+    """Configuration for input guardrails."""
+
+    enabled: bool = True
+    toxicity: bool = True
+    bias: bool = True
+    prompt_injection: bool = True
+    jailbreaking: bool = True
+
+
+@dataclass
 class DBConfig:
     """Configuration for PostgreSQL database."""
 

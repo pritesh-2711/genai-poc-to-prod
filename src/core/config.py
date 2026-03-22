@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yaml
 
 from .exceptions import ConfigurationError
-from .models import ChatConfig, DBConfig, LLMConfig
+from .models import ChatConfig, DBConfig, GuardrailsConfig, LLMConfig
 
 
 class ConfigManager:
@@ -31,6 +31,7 @@ class ConfigManager:
         self.llm_config = self._build_llm_config()
         self.chat_config = self._build_chat_config()
         self.db_config = self._build_db_config()
+        self.guardrails_config = self._build_guardrails_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -125,6 +126,22 @@ class ConfigManager:
             database=database,
             user=user,
             password=password,
+        )
+
+    def _build_guardrails_config(self) -> GuardrailsConfig:
+        """Build guardrails configuration from config file.
+
+        Returns:
+            GuardrailsConfig object with input guard settings.
+        """
+        gr = self.config.get("guardrails", {})
+        input_cfg = gr.get("input", {})
+        return GuardrailsConfig(
+            enabled=gr.get("enabled", True),
+            toxicity=input_cfg.get("toxicity", True),
+            bias=input_cfg.get("bias", True),
+            prompt_injection=input_cfg.get("prompt_injection", True),
+            jailbreaking=input_cfg.get("jailbreaking", True),
         )
 
     def get(self, key: str, default: Any = None) -> Any:
