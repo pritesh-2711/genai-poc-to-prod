@@ -142,6 +142,7 @@ class ConfigManager:
             bias=input_cfg.get("bias", True),
             prompt_injection=input_cfg.get("prompt_injection", True),
             jailbreaking=input_cfg.get("jailbreaking", True),
+            evaluator_model=gr.get("evaluator_model", "gpt-4o-mini"),
         )
 
     def get(self, key: str, default: Any = None) -> Any:

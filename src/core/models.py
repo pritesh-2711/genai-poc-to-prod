@@ -35,6 +35,7 @@ class GuardrailsConfig:
     bias: bool = True
     prompt_injection: bool = True
     jailbreaking: bool = True
+    evaluator_model: str = "gpt-4o-mini"  # model used by DeepEval metrics — use a fast cheap model
 
 
 @dataclass
