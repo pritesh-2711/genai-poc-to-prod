@@ -216,3 +216,6 @@ __marimo__/
 *.evals/
 *.deepeval/
 
+*.pdf
+HRA.txt
+data/
