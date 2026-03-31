@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..core.models import UserRecord
 from ..memory.repository import MemoryRepository, MemoryRepositoryError
 from .deps import get_current_user, get_repo
+from .loader import FileLoader
 from .schemas import CreateSessionRequest, SessionResponse
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -66,11 +67,20 @@ def delete_session(
     current_user: Annotated[UserRecord, Depends(get_current_user)],
     repo: Annotated[MemoryRepository, Depends(get_repo)],
 ):
-    """Hard-delete a session and all its messages (CASCADE)."""
+    """Hard-delete a session and all its messages (CASCADE).
+
+    Any uploaded files for the session are moved to archive storage before
+    the session record is removed from the database.
+    """
     try:
         repo.delete_session(session_id=session_id, user_id=current_user.user_id)
     except MemoryRepositoryError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    FileLoader().archive(
+        user_id=str(current_user.user_id),
+        session_id=str(session_id),
+    )
     return None
 
 
