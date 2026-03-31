@@ -81,3 +81,15 @@ class SendMessageResponse(BaseModel):
     """Both the stored user message and the assistant reply in one response."""
     user_message: ChatMessageResponse
     assistant_message: ChatMessageResponse
+
+
+# ---------------------------------------------------------------------------
+# File upload
+# ---------------------------------------------------------------------------
+
+class UploadResponse(BaseModel):
+    session_id: UUID
+    filename: str
+    file_path: str
+    size_bytes: int
+    content_type: str
