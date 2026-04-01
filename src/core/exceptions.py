@@ -45,3 +45,9 @@ class InputBlockedError(ResearchPaperChatException):
     """
 
     pass
+
+
+class ExtractionError(ResearchPaperChatException):
+    """Raised when document extraction fails (layout, text, table, or image)."""
+
+    pass
