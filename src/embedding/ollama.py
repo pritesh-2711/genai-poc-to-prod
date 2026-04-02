@@ -6,7 +6,7 @@ Pull an embedding model first:  ollama pull nomic-embed-text
 Usage:
     from src.embedding.ollama import OllamaEmbedder
     embedder = OllamaEmbedder()                                  # nomic-embed-text
-    embedder = OllamaEmbedder(model="mxbai-embed-large")        # swap model
+    embedder = OllamaEmbedder(model="nomic-embed-text-v2-moe:latest")        # swap model
     vectors = embedder.embed(["hello world", "foo bar"])
 """
 
@@ -24,7 +24,7 @@ class OllamaEmbedder(BaseEmbedder):
 
     Args:
         model:    Ollama model name that supports embeddings.
-                  Defaults to "nomic-embed-text".
+                  Defaults to "nomic-embed-text-v2-moe:latest".
         base_url: Base URL of the Ollama server.
                   Defaults to "http://localhost:11434".
         timeout:  Per-request timeout in seconds.
@@ -32,7 +32,7 @@ class OllamaEmbedder(BaseEmbedder):
 
     def __init__(
         self,
-        model: str = "nomic-embed-text",
+        model: str = "nomic-embed-text-v2-moe:latest",
         base_url: str = "http://localhost:11434",
         timeout: int = 30,
     ) -> None:
