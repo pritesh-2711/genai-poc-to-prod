@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..chat_service import ChatService
 from ..core.config import ConfigManager
+from ..embedding import LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
 from ..guardrails import InputGuard
 from .auth import router as auth_router
 from .chat import router as chat_router
@@ -47,10 +48,24 @@ async def lifespan(app: FastAPI):
         input_guard=input_guard,
     )
 
+    # Build embedder from config — loaded once, shared across all requests.
+    emb_cfg = config.embedding_config
+    _embedder_map = {
+        "local":  lambda: LocalEmbedder(model=emb_cfg.model),
+        "ollama": lambda: OllamaEmbedder(model=emb_cfg.model),
+        "openai": lambda: OpenAIEmbedder(model=emb_cfg.model, api_key=emb_cfg.api_key),
+    }
+    embedder = _embedder_map[emb_cfg.provider]()
+
     app.state.config = config
     app.state.chat_service = chat_service
+    app.state.embedder = embedder
 
-    logger.info("Application startup complete.")
+    logger.info(
+        f"Application startup complete. "
+        f"LLM={config.llm_config.provider}/{config.llm_config.model}, "
+        f"Embedder={emb_cfg.provider}/{emb_cfg.model}"
+    )
     yield
     logger.info("Application shutdown.")
 
