@@ -7,6 +7,17 @@ import uuid
 
 
 @dataclass
+class EmbeddingConfig:
+    """Configuration for the active embedding provider."""
+
+    provider: str       # "local" | "ollama" | "openai"
+    model: str
+    dimension: int      # vector dimension — must match what the embedder actually outputs
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+@dataclass
 class LLMConfig:
     """Configuration for LLM provider."""
 
