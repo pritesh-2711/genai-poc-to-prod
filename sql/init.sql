@@ -88,6 +88,9 @@ CREATE TABLE IF NOT EXISTS poc2prod.parenthierarchy (
     -- Additional Metadata (source, page range, etc.)
     metadata JSONB DEFAULT '{}'::jsonb,
 
+    content_type VARCHAR(20) NOT NULL DEFAULT 'text' 
+        CHECK (content_type IN ('text', 'table', 'image')),
+
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -117,7 +120,10 @@ CREATE TABLE IF NOT EXISTS poc2prod.ingestions (
 
     -- File Type Classification (Research papers are usually pdf, or docx)
     type VARCHAR(50) NOT NULL
-        CHECK (type IN ('pdf', 'doc')), 
+        CHECK (type IN ('pdf', 'doc')),
+
+    content_type VARCHAR(20) NOT NULL DEFAULT 'text'
+        CHECK (content_type IN ('text', 'table', 'image')),
 
     -- Chunk Content (child chunk text)
     chunk_content TEXT NOT NULL,
@@ -162,6 +168,10 @@ CREATE INDEX idx_ingestions_metadata    ON poc2prod.ingestions USING GIN(metadat
 -- parenthierarchy
 CREATE INDEX idx_parenthierarchy_filename ON poc2prod.parenthierarchy(filename);
 CREATE INDEX idx_parenthierarchy_metadata ON poc2prod.parenthierarchy USING GIN(metadata);
+
+-- Index for filtering chunks by type during retrieval
+CREATE INDEX IF NOT EXISTS idx_ingestions_content_type
+    ON poc2prod.ingestions(content_type);
 
 -- ============================================================================
 -- TRIGGER FUNCTION: auto-update updated_at
