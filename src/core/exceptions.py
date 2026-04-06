@@ -51,3 +51,9 @@ class ExtractionError(ResearchPaperChatException):
     """Raised when document extraction fails (layout, text, table, or image)."""
 
     pass
+
+
+class IngestionPipelineError(ResearchPaperChatException):
+    """Raised when the extract → chunk → embed → ingest pipeline fails."""
+
+    pass

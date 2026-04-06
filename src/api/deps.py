@@ -22,6 +22,9 @@ from jose import JWTError, jwt
 from ..chat_service import ChatService
 from ..core.config import ConfigManager
 from ..core.models import UserRecord
+from ..databases.pipeline import IngestionPipeline
+from ..databases.retrieval import PgVectorRetrievalRepository
+from ..embedding.base import BaseEmbedder
 from ..memory.repository import AuthenticationError, MemoryRepository, MemoryRepositoryError
 
 # ---------------------------------------------------------------------------
@@ -46,6 +49,11 @@ def get_chat_service(request: Request) -> ChatService:
     return request.app.state.chat_service
 
 
+def get_embedder(request: Request) -> BaseEmbedder:
+    """Return the embedder singleton (loaded once at startup)."""
+    return request.app.state.embedder
+
+
 # ---------------------------------------------------------------------------
 # Per-request dependencies
 # ---------------------------------------------------------------------------
@@ -53,6 +61,19 @@ def get_chat_service(request: Request) -> ChatService:
 def get_repo(request: Request) -> MemoryRepository:
     """Return a fresh MemoryRepository for each request."""
     return MemoryRepository(request.app.state.config.db_config)
+
+
+def get_retrieval_repo(request: Request) -> PgVectorRetrievalRepository:
+    """Return a fresh retrieval repository for each request."""
+    return PgVectorRetrievalRepository(request.app.state.config.db_config)
+
+
+def get_ingestion_pipeline(request: Request) -> IngestionPipeline:
+    """Return an IngestionPipeline backed by the startup embedder singleton."""
+    return IngestionPipeline(
+        db_config=request.app.state.config.db_config,
+        embedder=request.app.state.embedder,
+    )
 
 
 # ---------------------------------------------------------------------------

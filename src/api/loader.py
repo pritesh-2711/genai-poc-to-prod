@@ -2,8 +2,8 @@
 
 FileLoader manages the lifecycle of uploaded files on the local filesystem:
 
-    Active files   → local/active/{user_id}/{session_id}/{filename}
-    Archived files → local/archive/{user_id}/{session_id}/{filename}
+    Active files   → storage/{user_id}/active/{session_id}/{filename}
+    Archived files → storage/{user_id}/archive/{session_id}/{filename}
 
 When a session is deleted the entire session folder is moved from active to
 archive.  FileLoader is only used by the API layer; the extraction module
@@ -18,11 +18,11 @@ class FileLoader:
     """Handles saving, retrieving, and archiving uploaded files.
 
     Args:
-        base_dir: Root storage directory. Defaults to "local" (relative to
+        base_dir: Root storage directory. Defaults to "storage" (relative to
                   the working directory when the API server is started).
     """
 
-    def __init__(self, base_dir: str = "local") -> None:
+    def __init__(self, base_dir: str = "storage") -> None:
         self._base = Path(base_dir)
 
     # ------------------------------------------------------------------
@@ -82,7 +82,7 @@ class FileLoader:
     # ------------------------------------------------------------------
 
     def _active_dir(self, user_id: str, session_id: str) -> Path:
-        return self._base / "active" / user_id / session_id
+        return self._base / user_id / "active" / session_id
 
     def _archive_dir(self, user_id: str, session_id: str) -> Path:
-        return self._base / "archive" / user_id / session_id
+        return self._base / user_id / "archive" / session_id
