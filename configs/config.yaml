@@ -3,6 +3,19 @@ app:
   version: "1.0.0"
   debug: false
 
+embeddings:
+  provider: "ollama" # Options: "local", "ollama", "openai"
+  local:
+    model: "sentence-transformers/all-MiniLM-L6-v2"
+    dimension: 384
+  ollama:
+    model: "nomic-embed-text-v2-moe:latest"
+    dimension: 1024
+  openai:
+    model: "text-embedding-3-small"
+    api_key: "${OPENAI_API_KEY}"
+    dimension: 1536
+
 llm:
   # Provider options: "ollama", "openai"
   provider: "openai"
