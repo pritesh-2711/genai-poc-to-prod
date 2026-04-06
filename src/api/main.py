@@ -15,6 +15,7 @@ from ..embedding import LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
 from ..guardrails import InputGuard
 from .auth import router as auth_router
 from .chat import router as chat_router
+from .documents import router as documents_router
 from .sessions import router as sessions_router
 from .upload import router as upload_router
 
@@ -93,6 +94,7 @@ app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(chat_router)
 app.include_router(upload_router)
+app.include_router(documents_router)
 
 
 @app.get("/health", tags=["health"])

@@ -53,8 +53,8 @@ logging:
   file: "logs/app.log"
 
 guardrails:
-  # Set to false to disable all guardrail checks (e.g. for local dev with Ollama)
-  enabled: true
+  # Set to false to disable all guardrail checks
+  enabled: false
   # Model used by DeepEval to judge metrics. Use a fast cheap model to minimise
   # latency overhead. All metrics run concurrently so cost = 3 parallel calls.
   evaluator_model: "gpt-4o-mini"

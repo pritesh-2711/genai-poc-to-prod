@@ -50,6 +50,7 @@ class PgVectorRetrievalRepository(BaseRetrievalRepository):
             database=self.db_config.database,
             user=self.db_config.user,
             password=self.db_config.password,
+            server_settings={"search_path": "poc2prod,public"},
         )
 
     @staticmethod
@@ -191,4 +192,78 @@ class PgVectorRetrievalRepository(BaseRetrievalRepository):
                 "metadata": meta,
             })
 
+        return results
+
+    async def fetch_colocated_chunks(
+        self,
+        session_id: uuid.UUID,
+        pages: list[int],
+        filenames: list[str],
+        content_types: tuple[str, ...] = ("table", "image"),
+    ) -> list[dict]:
+        """Fetch table/image chunks that are co-located (same page + file) with
+        the parent contexts already retrieved for a query.
+
+        Called after fetch_parent_contexts so that any tables or figures on the
+        same pages as the matched text passages are surfaced automatically,
+        regardless of their own vector similarity score.
+
+        Args:
+            session_id:    Restrict to this session's ingested chunks.
+            pages:         Page numbers covered by the fetched parent contexts.
+            filenames:     Filenames of those parent contexts.
+            content_types: Which non-text content types to include.
+
+        Returns:
+            List of dicts with keys: chunk_content, filename, metadata,
+            content_type.
+        """
+        if not pages or not filenames:
+            return []
+
+        page_strs = [str(p) for p in pages]
+
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    chunk_content,
+                    filename,
+                    metadata,
+                    content_type
+                FROM poc2prod.ingestions
+                WHERE session_id = $1
+                  AND content_type = ANY($2::text[])
+                  AND filename = ANY($3::text[])
+                  AND metadata->>'page' = ANY($4::text[])
+                ORDER BY (metadata->>'page')::int, content_type;
+                """,
+                str(session_id),
+                list(content_types),
+                filenames,
+                page_strs,
+            )
+        except Exception as e:
+            logger.warning(f"fetch_colocated_chunks failed (non-fatal): {e}")
+            return []
+        finally:
+            await conn.close()
+
+        results = []
+        for row in rows:
+            meta = row["metadata"]
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            results.append({
+                "chunk_content": row["chunk_content"],
+                "filename": row["filename"],
+                "metadata": meta,
+                "content_type": row["content_type"],
+            })
+
+        logger.debug(
+            f"fetch_colocated_chunks() returned {len(results)} table/image chunks "
+            f"for pages {pages}"
+        )
         return results
