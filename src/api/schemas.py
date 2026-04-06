@@ -93,3 +93,6 @@ class UploadResponse(BaseModel):
     file_path: str
     size_bytes: int
     content_type: str
+    file_description: str = ""
+    parent_chunks: int = 0
+    child_chunks: int = 0
