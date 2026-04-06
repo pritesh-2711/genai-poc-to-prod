@@ -218,4 +218,6 @@ __marimo__/
 
 *.pdf
 HRA.txt
+assets/data/
 data/
+storage/
