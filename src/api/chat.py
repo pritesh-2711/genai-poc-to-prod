@@ -40,8 +40,8 @@ _BLOCKED_REPLY = (
     "Please keep our conversation respectful and on-topic."
 )
 
-_RAG_TOP_K = 5
-_MAX_CONTEXT_CHARS = 4000  # cap total context injected into system prompt
+_RAG_TOP_K = 10
+_MAX_CONTEXT_CHARS = 8000  # cap total context injected into system prompt
 
 
 def _to_msg_response(record) -> ChatMessageResponse:
@@ -66,7 +66,7 @@ async def _build_rag_context(
     no results are found.
     """
     try:
-        query_vec = embedder.embed_one(query)
+        query_vec = embedder.embed_query(query)
         child_hits = await retrieval_repo.search(
             query_embedding=query_vec,
             top_k=_RAG_TOP_K,
@@ -86,16 +86,48 @@ async def _build_rag_context(
         # Prefer parent chunks (richer context); fall back to child text
         if parent_ids:
             parents = await retrieval_repo.fetch_parent_contexts(parent_ids)
-            passages = [p["parent_chunk_content"] for p in parents if p.get("parent_chunk_content")]
         else:
-            passages = [hit["chunk_content"] for hit in child_hits]
+            parents = []
 
-        if not passages:
+        if not parents and not child_hits:
             return None
 
-        # Build context block, capped at _MAX_CONTEXT_CHARS
+        # ----------------------------------------------------------------
+        # Co-located retrieval: fetch table/image chunks from the same
+        # pages as the matched parent contexts, regardless of their own
+        # vector similarity score.
+        # ----------------------------------------------------------------
+        colocated: list[dict] = []
+        if parents:
+            # Collect page numbers and filenames from parent metadata
+            pages_seen: set[int] = set()
+            filenames_seen: set[str] = set()
+            for p in parents:
+                meta = p.get("metadata") or {}
+                page = meta.get("page")
+                if isinstance(page, int):
+                    pages_seen.add(page)
+                if p.get("filename"):
+                    filenames_seen.add(p["filename"])
+
+            if pages_seen and filenames_seen:
+                colocated = await retrieval_repo.fetch_colocated_chunks(
+                    session_id=session_id,
+                    pages=list(pages_seen),
+                    filenames=list(filenames_seen),
+                )
+
+        # ----------------------------------------------------------------
+        # Build context block
+        # ----------------------------------------------------------------
         context_parts: list[str] = []
         total = 0
+
+        # Primary passages: parent text chunks
+        passages = [p["parent_chunk_content"] for p in parents if p.get("parent_chunk_content")]
+        if not passages:
+            passages = [hit["chunk_content"] for hit in child_hits]
+
         for i, passage in enumerate(passages, 1):
             snippet = passage.strip()
             if total + len(snippet) > _MAX_CONTEXT_CHARS:
@@ -104,6 +136,27 @@ async def _build_rag_context(
             total += len(snippet)
             if total >= _MAX_CONTEXT_CHARS:
                 break
+
+        # Append co-located table/image chunks (deduplicated by content)
+        seen_content: set[str] = set()
+        for chunk in colocated:
+            if total >= _MAX_CONTEXT_CHARS:
+                break
+            text = chunk["chunk_content"].strip()
+            if not text or text in seen_content:
+                continue
+            seen_content.add(text)
+            ctype = chunk.get("content_type", "table")
+            page = (chunk.get("metadata") or {}).get("page", "?")
+            label = f"[{ctype.capitalize()} p.{page}]"
+            snippet = f"{label} {text}"
+            if total + len(snippet) > _MAX_CONTEXT_CHARS:
+                snippet = snippet[: _MAX_CONTEXT_CHARS - total]
+            context_parts.append(snippet)
+            total += len(snippet)
+
+        if not context_parts:
+            return None
 
         return "\n\n".join(context_parts)
 

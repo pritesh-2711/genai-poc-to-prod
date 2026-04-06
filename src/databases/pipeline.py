@@ -32,6 +32,7 @@ from ..core.models import DBConfig
 from ..embedding.base import BaseEmbedder
 from ..extraction.base import ExtractionContext
 from ..extraction.layout import LayoutExtractor
+from ..extraction.table import TableExtractor
 from ..extraction.text import TextExtractor
 from .ingestion import PgVectorIngestionRepository
 
@@ -52,6 +53,8 @@ class IngestionResult:
     filename: str
     parent_count: int
     child_count: int
+    table_parent_count: int = 0
+    table_child_count: int = 0
     parent_uuids: list[str] = field(default_factory=list)
     child_uuids: list[str] = field(default_factory=list)
 
@@ -109,22 +112,33 @@ class IngestionPipeline:
         filename = file_path.name
 
         # ------------------------------------------------------------------
-        # Stage 1 — Extract
+        # Stage 1 — Extract (layout → text + tables)
         # ------------------------------------------------------------------
         try:
             context = ExtractionContext(file_path=str(file_path))
             LayoutExtractor().extract(context)
             text_records = TextExtractor().extract(context)
+            try:
+                table_records = TableExtractor().extract(context)
+            except Exception as te:
+                logger.warning(f"Table extraction failed for '{filename}' (skipping tables): {te}")
+                table_records = []
         except Exception as e:
             raise IngestionPipelineError(
                 f"Extraction failed for '{filename}': {e}"
             ) from e
 
         # ------------------------------------------------------------------
-        # Stage 2 — Hierarchical chunking
+        # Stage 2a — Chunk text records
+        #
+        # HierarchicalChunker assigns child parent_id as a LOCAL index
+        # (0-based) within each chunk_with_parents() call.  ingest_documents()
+        # builds a GLOBAL index → UUID map, so we must offset each call's
+        # local indices by the count of parents already accumulated.
         # ------------------------------------------------------------------
-        all_parent_docs = []
-        all_child_docs = []
+        text_parent_docs = []
+        text_child_docs = []
+        text_parent_offset = 0
 
         for record in text_records:
             if record.record_type not in _TEXT_TYPES:
@@ -139,47 +153,117 @@ class IngestionPipeline:
             parents, children = self._chunker.chunk_with_parents(
                 record.content, metadata=meta
             )
-            all_parent_docs.extend(parents)
-            all_child_docs.extend(children)
+            # Offset local parent_ids to global indices
+            for child in children:
+                child.metadata["parent_id"] = (
+                    child.metadata["parent_id"] + text_parent_offset
+                )
+            text_parent_docs.extend(parents)
+            text_child_docs.extend(children)
+            text_parent_offset += len(parents)
 
-        if not all_child_docs:
-            logger.warning(f"No extractable text in '{filename}' — skipping ingestion")
+        # ------------------------------------------------------------------
+        # Stage 2b — Chunk table records (markdown representation)
+        # ------------------------------------------------------------------
+        table_parent_docs = []
+        table_child_docs = []
+        table_parent_offset = 0
+
+        for record in table_records:
+            markdown = (record.content or {}).get("markdown", "")
+            if not markdown or not markdown.strip():
+                continue
+
+            table_text = f"Table (page {record.page}):\n{markdown}"
+            meta = {"page": record.page, "type": "table"}
+            if record.bbox:
+                meta["bbox"] = record.bbox
+
+            parents, children = self._chunker.chunk_with_parents(
+                table_text, metadata=meta
+            )
+            for child in children:
+                child.metadata["parent_id"] = (
+                    child.metadata["parent_id"] + table_parent_offset
+                )
+            table_parent_docs.extend(parents)
+            table_child_docs.extend(children)
+            table_parent_offset += len(parents)
+
+        if not text_child_docs and not table_child_docs:
+            logger.warning(f"No extractable content in '{filename}' — skipping ingestion")
             return IngestionResult(filename=filename, parent_count=0, child_count=0)
 
         # ------------------------------------------------------------------
-        # Stage 3 — Embed child chunks
+        # Stage 3 — Embed all child chunks
         # ------------------------------------------------------------------
         try:
-            child_texts = [doc.page_content for doc in all_child_docs]
-            embeddings = self._embedder.embed(child_texts)
+            all_texts = (
+                [doc.page_content for doc in text_child_docs]
+                + [doc.page_content for doc in table_child_docs]
+            )
+            all_embeddings = self._embedder.embed(all_texts)
         except Exception as e:
             raise IngestionPipelineError(
                 f"Embedding failed for '{filename}': {e}"
             ) from e
 
+        text_embeddings = all_embeddings[: len(text_child_docs)]
+        table_embeddings = all_embeddings[len(text_child_docs):]
+
         # ------------------------------------------------------------------
-        # Stage 4 — Persist to PostgreSQL
+        # Stage 4 — Persist text chunks
         # ------------------------------------------------------------------
-        parent_uuids, child_uuids = await self._repo.ingest_documents(
-            parent_docs=all_parent_docs,
-            child_docs=all_child_docs,
-            embeddings=embeddings,
-            user_id=user_id,
-            session_id=session_id,
-            filename=filename,
-            file_description=file_description,
-            file_type=file_type,
-        )
+        text_parent_uuids: list[str] = []
+        text_child_uuids: list[str] = []
+
+        if text_child_docs:
+            text_parent_uuids, text_child_uuids = await self._repo.ingest_documents(
+                parent_docs=text_parent_docs,
+                child_docs=text_child_docs,
+                embeddings=text_embeddings,
+                user_id=user_id,
+                session_id=session_id,
+                filename=filename,
+                file_description=file_description,
+                file_type=file_type,
+                content_type="text",
+            )
+
+        # ------------------------------------------------------------------
+        # Stage 4b — Persist table chunks
+        # ------------------------------------------------------------------
+        table_parent_uuids: list[str] = []
+        table_child_uuids: list[str] = []
+
+        if table_child_docs:
+            table_parent_uuids, table_child_uuids = await self._repo.ingest_documents(
+                parent_docs=table_parent_docs,
+                child_docs=table_child_docs,
+                embeddings=table_embeddings,
+                user_id=user_id,
+                session_id=session_id,
+                filename=filename,
+                file_description=file_description,
+                file_type=file_type,
+                content_type="table",
+            )
+
+        total_parents = len(text_parent_uuids) + len(table_parent_uuids)
+        total_children = len(text_child_uuids) + len(table_child_uuids)
 
         logger.info(
             f"Pipeline complete for '{filename}': "
-            f"{len(parent_uuids)} parents, {len(child_uuids)} children "
+            f"{len(text_parent_uuids)} text parents, {len(text_child_uuids)} text children; "
+            f"{len(table_parent_uuids)} table parents, {len(table_child_uuids)} table children "
             f"(user={user_id}, session={session_id})"
         )
         return IngestionResult(
             filename=filename,
-            parent_count=len(parent_uuids),
-            child_count=len(child_uuids),
-            parent_uuids=parent_uuids,
-            child_uuids=child_uuids,
+            parent_count=total_parents,
+            child_count=total_children,
+            table_parent_count=len(table_parent_uuids),
+            table_child_count=len(table_child_uuids),
+            parent_uuids=text_parent_uuids + table_parent_uuids,
+            child_uuids=text_child_uuids + table_child_uuids,
         )

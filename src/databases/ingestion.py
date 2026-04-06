@@ -55,6 +55,7 @@ class PgVectorIngestionRepository(BaseIngestionRepository):
             database=self.db_config.database,
             user=self.db_config.user,
             password=self.db_config.password,
+            server_settings={"search_path": "poc2prod,public"},
         )
 
     @staticmethod
@@ -72,6 +73,7 @@ class PgVectorIngestionRepository(BaseIngestionRepository):
         filename: str,
         file_description: str,
         file_type: str,
+        content_type: str = "text",
     ) -> tuple[list[str], list[str]]:
         """Insert parent chunks then child chunks in a single connection.
 
@@ -99,13 +101,14 @@ class PgVectorIngestionRepository(BaseIngestionRepository):
                 row = await conn.fetchrow(
                     """
                     INSERT INTO poc2prod.parenthierarchy
-                        (parent_chunk_content, filename, metadata)
-                    VALUES ($1, $2, $3::jsonb)
+                        (parent_chunk_content, filename, metadata, content_type)
+                    VALUES ($1, $2, $3::jsonb, $4)
                     RETURNING id;
                     """,
                     doc.page_content,
                     filename,
                     json.dumps(parent_meta),
+                    content_type,
                 )
                 parent_uuids.append(str(row["id"]))
 
@@ -132,9 +135,9 @@ class PgVectorIngestionRepository(BaseIngestionRepository):
                     """
                     INSERT INTO poc2prod.ingestions
                         (parent_id, user_id, session_id, filename, file_description,
-                         type, chunk_content, embeddings, metadata)
+                         type, chunk_content, embeddings, metadata, content_type)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9::jsonb)
+                        ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9::jsonb, $10)
                     RETURNING id;
                     """,
                     parent_uuid,
@@ -146,6 +149,7 @@ class PgVectorIngestionRepository(BaseIngestionRepository):
                     doc.page_content,
                     self._vec_str(vector),
                     json.dumps(stored_meta),
+                    content_type,
                 )
                 child_uuids.append(str(row["id"]))
 
