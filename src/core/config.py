@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yaml
 
 from .exceptions import ConfigurationError
-from .models import ChatConfig, DBConfig, GuardrailsConfig, LLMConfig
+from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig
 
 
 class ConfigManager:
@@ -32,6 +32,7 @@ class ConfigManager:
         self.chat_config = self._build_chat_config()
         self.db_config = self._build_db_config()
         self.guardrails_config = self._build_guardrails_config()
+        self.embedding_config = self._build_embedding_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -126,6 +127,49 @@ class ConfigManager:
             database=database,
             user=user,
             password=password,
+        )
+
+    def _build_embedding_config(self) -> EmbeddingConfig:
+        """Build embedding configuration from config file.
+
+        Reads the active provider and picks model + dimension from its sub-section.
+        The dimension is the single source of truth used by ingestion code to know
+        how wide the vector column will be at runtime.
+
+        Returns:
+            EmbeddingConfig with provider, model, and dimension.
+
+        Raises:
+            ConfigurationError: If provider is unsupported or dimension is missing.
+        """
+        emb = self.config.get("embeddings", {})
+        provider = emb.get("provider", "local").lower()
+
+        supported = {"local", "ollama", "openai"}
+        if provider not in supported:
+            raise ConfigurationError(
+                f"Unsupported embedding provider '{provider}'. Choose from: {supported}"
+            )
+
+        provider_cfg = emb.get(provider, {})
+        model = provider_cfg.get("model")
+        dimension = provider_cfg.get("dimension")
+
+        if not model:
+            raise ConfigurationError(
+                f"embeddings.{provider}.model is required in config.yaml"
+            )
+        if not dimension:
+            raise ConfigurationError(
+                f"embeddings.{provider}.dimension is required in config.yaml"
+            )
+
+        return EmbeddingConfig(
+            provider=provider,
+            model=model,
+            dimension=int(dimension),
+            api_key=self._resolve_env_vars(provider_cfg.get("api_key")),
+            base_url=provider_cfg.get("base_url"),
         )
 
     def _build_guardrails_config(self) -> GuardrailsConfig:
