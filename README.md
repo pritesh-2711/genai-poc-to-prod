@@ -30,9 +30,12 @@ Each branch adds one capability on top of the previous. Follow them in order.
 
 - Read `notebooks/explore_memory.ipynb` — validates the DB schema and the full conversation round-trip before any application code
 - Read `docs/design_intuition.md` (Part 1) — explains why a three-table schema (users → sessions → chats) is the right design for multi-user isolation
+- Read `docs/design_intuition.md` (Part 3) — explains the short-term / long-term memory split, activation guard, similarity threshold, and deduplication
 - Run `sql/init.sql` against a local PostgreSQL instance (`poc_to_prod` database)
 - Key additions in `src/memory/repository.py`: user auth (bcrypt), session management, conversation history retrieval
-- Conversation history is injected into the LLM system prompt on every call via `ChatService._build_system_prompt`
+- Conversation history is split into two layers and injected into the LLM system prompt via `ChatService._build_system_prompt`:
+  - **Short-term** — last `short_term_limit` messages (configurable, default 10), always included
+  - **Long-term** — up to 10 semantically similar past messages retrieved via cosine search over `chats.embeddings`; only active once the session exceeds `short_term_limit` messages and only includes results above `long_term_similarity_threshold`
 
 ### Branch: `feature/compliance`
 
@@ -62,7 +65,7 @@ Each branch adds one capability on top of the previous. Follow them in order.
 - Key schema additions in `sql/init.sql`:
   - `poc2prod.parenthierarchy` — large parent chunks (not vector-indexed; fetched by UUID)
   - `poc2prod.ingestions` — small child chunks with `VECTOR` embeddings (searched at query time)
-  - `poc2prod.chats` — gains an `embeddings VECTOR` column for future semantic history search
+  - `poc2prod.chats` — gains an `embeddings VECTOR` column; now actively written on every message for long-term memory search
   - `VECTOR` (no fixed dimension) used throughout — dimension enforced in application layer via `EmbeddingConfig`
 - Application changes:
   - `src/databases/pipeline.py` — `IngestionPipeline.run()` orchestrates extract → chunk → embed → ingest in one async call
@@ -100,7 +103,7 @@ Each branch adds one capability on top of the previous. Follow them in order.
 
 ## What has been covered
 
-- [x] **Memory** — PostgreSQL-backed conversation history per user per session. History injected as context into every LLM call.
+- [x] **Memory** — PostgreSQL-backed conversation history per user per session. Split into short-term (last N messages, bounded by `short_term_limit`) and long-term (cosine similarity search over embedded chat history, gated by session length and `long_term_similarity_threshold`). Duplicates between layers are removed before the system prompt is assembled.
 - [x] **Multi-user support** — JWT-authenticated REST API. Each user sees only their own sessions and messages.
 - [x] **Guardrails** — DeepEval metrics (`ToxicityMetric`, `BiasMetric`, `GEval`) run concurrently before every LLM call. Blocked messages return a friendly assistant reply, not an error.
 - [x] **RAG** — PDF/DOCX upload → extraction → hierarchical chunking → embedding → pgvector storage → cosine retrieval → parent-document context → grounded LLM response. Fully session-scoped.
