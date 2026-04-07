@@ -89,7 +89,7 @@ The `notebooks/explore_memory.ipynb` notebook validated the schema and operation
 
 **Step 4 — Extract into a reusable repository.** Once the notebook queries were stable, they moved into `src/memory/repository.py` as a `MemoryRepository` class. Each method opens and closes its own connection — per-method connections keep things simple and avoid lifecycle issues.
 
-**Step 5 — Conversation history as LLM context.** Fetching history per session is a simple `SELECT ... ORDER BY created_at ASC`. In the application, this history is injected into the LLM's system prompt as a labelled conversation block via `ChatService._build_system_prompt`.
+**Step 5 — Conversation history as LLM context.** Fetching history per session is a simple `SELECT ... ORDER BY created_at ASC`. In the application, this history is injected into the LLM's system prompt via `ChatService._build_system_prompt`. See Part 3 for how the history is split into short-term and long-term memory.
 
 ---
 
@@ -291,3 +291,119 @@ The `notebooks/explore_ingestion.ipynb` notebook validated every stage before wi
 - Retrieval is session-scoped — users only retrieve from their own uploaded files.
 - Switching embedding providers requires one config line change; no schema migration needed.
 - The parent-document pattern gives the LLM a richer context window than raw child chunks alone.
+
+---
+
+## Part 3 — Short-Term and Long-Term Memory
+
+### The Problem with Unbounded History
+
+The initial design injected the entire session history into the system prompt on every turn. This has two failure modes:
+
+1. **Token limit exhaustion** — long sessions silently degrade response quality and eventually exceed the LLM's context window.
+2. **Noise over signal** — old, unrelated exchanges dilute the context, making the LLM less focused on what is currently relevant.
+
+### The Two-Layer Memory Architecture
+
+Memory is now split into two complementary layers:
+
+```text
+Every chat turn
+  │
+  ├─ Short-term memory  — last N messages (chronological recency)
+  │
+  └─ Long-term memory   — top-K semantically similar past messages
+                          (relevance, not recency)
+```
+
+Both layers feed into the system prompt, with duplicates removed. The LLM always sees the most recent context **and** the most relevant historical context, without redundancy or runaway growth.
+
+### Short-Term Memory
+
+Short-term memory is the last `short_term_limit` messages from the session, fetched chronologically. It is the direct successor to the original unbounded history — same idea, bounded by config.
+
+```yaml
+# configs/config.yaml
+chat:
+  short_term_limit: 10
+```
+
+The query fetches `short_term_limit + 1` rows. The extra row serves a dual purpose: it provides the just-added user message (which is then sliced off), and its presence signals that the session has crossed the threshold needed to activate long-term memory — no separate `COUNT` query required.
+
+### Long-Term Memory
+
+Long-term memory is a cosine similarity search over **all past messages in the session that have stored embeddings**. It retrieves up to 10 messages whose semantic content is most similar to the current user query, regardless of when they occurred.
+
+#### When it activates
+
+Long-term memory is only queried when the session history has **already crossed** `short_term_limit`. The guard condition uses the same `+1` fetch described above: if `len(raw_history) == short_term_limit + 1`, there is history older than what short-term covers and the semantic search is meaningful. Otherwise it is skipped entirely — no vector search, no embedder call.
+
+```text
+Session has ≤ short_term_limit messages → long-term skipped
+Session has > short_term_limit messages → long-term search runs
+```
+
+#### Similarity threshold
+
+Not every semantic match is worth including. A result that is only marginally related would add noise. A minimum cosine similarity threshold filters the raw results:
+
+```yaml
+# configs/config.yaml
+chat:
+  long_term_similarity_threshold: 0.50
+```
+
+Results below this value are dropped before the long-term list is finalised.
+
+#### Deduplication
+
+After the threshold filter, any message already present in short-term memory is removed from the long-term list by `chat_id`. This prevents the same message from appearing twice in the system prompt.
+
+### How Embeddings Are Stored
+
+Every user message and assistant reply is now embedded and stored in the `chats.embeddings` column at write time:
+
+- **User message** — embedded with `embedder.embed_query()` (uses the query-task prefix for asymmetric models). The same vector is reused for RAG retrieval and long-term memory search — no double embedding.
+- **Assistant message** — embedded with `embedder.embed_one()` (uses the document-task prefix).
+- **Blocked/error replies** — stored without an embedding (`embeddings IS NULL`). These rows are invisible to the semantic search.
+
+The `chats.embeddings` column existed in the schema from the `feature/rag` branch but was always NULL. It is now actively written.
+
+### System Prompt Structure
+
+The final system prompt is assembled in this order (closest to the current question last):
+
+```text
+[Base system prompt]
+[Relevant Document Excerpts]   ← RAG context (if documents uploaded)
+[Relevant Past Exchanges]      ← Long-term memory (if active and non-empty)
+[Recent Conversation]          ← Short-term memory
+```
+
+### Observability
+
+Every turn logs the memory pipeline at INFO level:
+
+```text
+[memory] session=... | short-term fetched: 10 (limit=10)
+[memory] session=... | long-term raw results: 7
+[memory] session=... | long-term after threshold (>= 0.5): 4
+[memory] session=... | long-term after dedup: 3 (1 duplicate(s) removed)
+```
+
+Or when the guard fires:
+
+```text
+[memory] session=... | short-term fetched: 6 (limit=10)
+[memory] session=... | long-term skipped (session has not yet crossed short_term_limit=10)
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+| --- | --- |
+| `short_term_limit + 1` fetch instead of a `COUNT` query | One DB round-trip detects the threshold and retrieves the data simultaneously |
+| Threshold in `config.yaml`, not hardcoded | Tunable without code changes — raise it for precision, lower it for broader recall |
+| Guard on session length | Prevents wasted vector search on short sessions where short-term already covers everything |
+| Reuse `query_vec` across RAG and long-term search | Embed once per turn regardless of how many retrieval systems consume the vector |
+| Blocked replies stored without embeddings | Toxic/blocked exchanges should not influence future semantic retrieval |
