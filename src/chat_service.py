@@ -204,6 +204,31 @@ class ChatService:
 
         return "".join(parts)
 
+    async def stream_response_async(
+        self,
+        user_message: str,
+        history: Optional[List[ChatRecord]] = None,
+        rag_context: Optional[str] = None,
+    ):
+        """Stream tokens from the LLM one chunk at a time.
+
+        Yields str chunks as they arrive from the provider.
+        Raises InputBlockedError if the input guard blocks the message.
+        """
+        if self.input_guard:
+            result = await self.input_guard.acheck(user_message)
+            if not result.passed:
+                raise InputBlockedError(
+                    f"Message blocked by {result.violated_guard} guard."
+                )
+
+        system_prompt = self._build_system_prompt(history, rag_context)
+        async for chunk in self.llm_provider.astream_chat(
+            user_message=user_message,
+            system_prompt=system_prompt,
+        ):
+            yield chunk
+
     def switch_provider(self, provider_name: str, model: Optional[str] = None) -> None:
         """Switch to a different LLM provider.
 

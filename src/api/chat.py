@@ -17,11 +17,13 @@ Retrieval is best-effort: if no documents are uploaded for the session or
 the vector search fails, the assistant responds from its base knowledge.
 """
 
+import json
 import logging
-from typing import Annotated, List, Optional
+from typing import Annotated, AsyncGenerator, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from ..chat_service import ChatService
 from ..core.exceptions import InputBlockedError
@@ -249,4 +251,103 @@ async def send_message(
     return SendMessageResponse(
         user_message=_to_msg_response(user_record),
         assistant_message=_to_msg_response(assistant_record),
+    )
+
+
+def _sse(data: dict) -> str:
+    """Format a dict as a Server-Sent Events data line."""
+    return f"data: {json.dumps(data, default=str)}\n\n"
+
+
+@router.post("/sessions/{session_id}/messages/stream")
+async def stream_message(
+    session_id: UUID,
+    body: SendMessageRequest,
+    _current_user: Annotated[UserRecord, Depends(get_current_user)],
+    repo: Annotated[MemoryRepository, Depends(get_repo)],
+    chat_service: Annotated[ChatService, Depends(get_chat_service)],
+    embedder: Annotated[BaseEmbedder, Depends(get_embedder)],
+    retrieval_repo: Annotated[PgVectorRetrievalRepository, Depends(get_retrieval_repo)],
+):
+    """Same RAG cycle as send_message, but streams the LLM reply token-by-token via SSE.
+
+    SSE event types:
+      {"type": "user_message", "chat_id": ..., "session_id": ..., "sender": "user",
+       "message": ..., "created_at": ...}
+      {"type": "token", "content": "<chunk>"}   (repeated)
+      {"type": "done",  "chat_id": ..., "session_id": ..., "sender": "assistant",
+       "message": <full text>, "created_at": ...}
+      {"type": "error", "detail": "..."}        (on failure)
+    """
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        try:
+            # 1. Persist user message and emit it immediately
+            try:
+                user_record = repo.add_message(
+                    session_id=session_id,
+                    sender="user",
+                    message=body.message,
+                )
+            except MemoryRepositoryError as e:
+                yield _sse({"type": "error", "detail": str(e)})
+                return
+
+            yield _sse({
+                "type": "user_message",
+                **_to_msg_response(user_record).model_dump(mode="json"),
+            })
+
+            # 2. RAG retrieval (best-effort)
+            rag_context = await _build_rag_context(
+                query=body.message,
+                session_id=session_id,
+                embedder=embedder,
+                retrieval_repo=retrieval_repo,
+            )
+
+            history = repo.get_conversation_history(session_id=session_id)
+            context_history = history[:-1]  # exclude the message just added
+
+            # 3. Stream LLM tokens
+            full_text = ""
+            try:
+                async for chunk in chat_service.stream_response_async(
+                    user_message=body.message,
+                    history=context_history,
+                    rag_context=rag_context,
+                ):
+                    full_text += chunk
+                    yield _sse({"type": "token", "content": chunk})
+            except InputBlockedError:
+                full_text = _BLOCKED_REPLY
+                yield _sse({"type": "token", "content": full_text})
+
+            # 4. Persist assistant reply and emit done event
+            try:
+                assistant_record = repo.add_message(
+                    session_id=session_id,
+                    sender="assistant",
+                    message=full_text,
+                )
+            except MemoryRepositoryError as e:
+                yield _sse({"type": "error", "detail": str(e)})
+                return
+
+            yield _sse({
+                "type": "done",
+                **_to_msg_response(assistant_record).model_dump(mode="json"),
+            })
+
+        except Exception as e:
+            logger.exception("Unexpected error in stream_message")
+            yield _sse({"type": "error", "detail": f"Unexpected error: {e}"})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
