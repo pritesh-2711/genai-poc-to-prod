@@ -35,6 +35,8 @@ class ChatConfig:
 
     system_prompt: str
     timeout: int = 60
+    short_term_limit: int = 10
+    long_term_similarity_threshold: float = 0.70
 
 
 @dataclass

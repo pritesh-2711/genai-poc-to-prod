@@ -41,6 +41,7 @@ class MemoryRepository:
             database=self.db_config.database,
             user=self.db_config.user,
             password=self.db_config.password,
+            options="-c search_path=poc2prod,public",
         )
 
     # ------------------------------------------------------------------
@@ -333,20 +334,45 @@ class MemoryRepository:
     # Chat messages
     # ------------------------------------------------------------------
 
-    def add_message(self, session_id: uuid.UUID, sender: str, message: str) -> ChatRecord:
-        """Persist a chat message."""
+    def add_message(
+        self,
+        session_id: uuid.UUID,
+        sender: str,
+        message: str,
+        embedding: list[float] | None = None,
+    ) -> ChatRecord:
+        """Persist a chat message, optionally storing its embedding vector.
+
+        Args:
+            session_id: UUID of the session.
+            sender:     'user' or 'assistant'.
+            message:    Message text.
+            embedding:  Float vector to store in the embeddings column. Pass None
+                        to leave the column NULL (e.g. for blocked/error replies).
+        """
         conn = self._connect()
         try:
             cur = conn.cursor(cursor_factory=RealDictCursor)
             try:
-                cur.execute(
-                    """
-                    INSERT INTO poc2prod.chats (session_id, sender, message)
-                    VALUES (%s, %s, %s)
-                    RETURNING chat_id, session_id, sender, message, created_at;
-                    """,
-                    (str(session_id), sender, message),
-                )
+                if embedding is not None:
+                    vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
+                    cur.execute(
+                        """
+                        INSERT INTO poc2prod.chats (session_id, sender, message, embeddings)
+                        VALUES (%s, %s, %s, %s::vector)
+                        RETURNING chat_id, session_id, sender, message, created_at;
+                        """,
+                        (str(session_id), sender, message, vec_str),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO poc2prod.chats (session_id, sender, message)
+                        VALUES (%s, %s, %s)
+                        RETURNING chat_id, session_id, sender, message, created_at;
+                        """,
+                        (str(session_id), sender, message),
+                    )
                 row = cur.fetchone()
                 conn.commit()
             except Exception as e:

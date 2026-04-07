@@ -141,6 +141,99 @@ class PgVectorRetrievalRepository(BaseRetrievalRepository):
         logger.debug(f"search() returned {len(results)} results (top_k={top_k})")
         return results
 
+    async def search_conversation_history(
+        self,
+        query_embedding: list[float],
+        session_id: uuid.UUID,
+        top_k: int = 10,
+        exclude_chat_id: Optional[str] = None,
+    ) -> list[dict]:
+        """Cosine similarity search over past chat messages for long-term memory.
+
+        Only rows where ``embeddings IS NOT NULL`` are searched — messages stored
+        before the embedding feature was added are silently skipped.
+
+        Args:
+            query_embedding:  Float vector for the current user query.
+            session_id:       Restrict search to this session's chat rows.
+            top_k:            Number of nearest neighbours to return.
+            exclude_chat_id:  chat_id (str) to exclude — typically the just-persisted
+                              user message so it doesn't appear in its own context.
+
+        Returns:
+            List of dicts ordered by similarity descending:
+                chat_id    (str)
+                session_id (str)
+                sender     (str)
+                message    (str)
+                created_at (datetime)
+                similarity (float)
+        """
+        vec_str = self._vec_str(query_embedding)
+
+        if exclude_chat_id is not None:
+            sql = """
+                SELECT
+                    chat_id::text                              AS chat_id,
+                    session_id::text                           AS session_id,
+                    sender,
+                    message,
+                    created_at,
+                    1 - (embeddings <=> $1::vector)            AS similarity
+                FROM poc2prod.chats
+                WHERE embeddings IS NOT NULL
+                  AND session_id = $2
+                  AND chat_id != $3::uuid
+                ORDER BY embeddings <=> $1::vector
+                LIMIT $4;
+            """
+            params = (vec_str, str(session_id), exclude_chat_id, top_k)
+        else:
+            sql = """
+                SELECT
+                    chat_id::text                              AS chat_id,
+                    session_id::text                           AS session_id,
+                    sender,
+                    message,
+                    created_at,
+                    1 - (embeddings <=> $1::vector)            AS similarity
+                FROM poc2prod.chats
+                WHERE embeddings IS NOT NULL
+                  AND session_id = $2
+                ORDER BY embeddings <=> $1::vector
+                LIMIT $3;
+            """
+            params = (vec_str, str(session_id), top_k)
+
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(sql, *params)
+        except Exception as e:
+            logger.error(f"search_conversation_history failed: {e}")
+            raise RetrievalRepositoryError(
+                f"search_conversation_history failed: {e}"
+            ) from e
+        finally:
+            await conn.close()
+
+        results = [
+            {
+                "chat_id":    row["chat_id"],
+                "session_id": row["session_id"],
+                "sender":     row["sender"],
+                "message":    row["message"],
+                "created_at": row["created_at"],
+                "similarity": float(row["similarity"]),
+            }
+            for row in rows
+        ]
+
+        logger.debug(
+            f"search_conversation_history() returned {len(results)} results "
+            f"(session={session_id}, top_k={top_k})"
+        )
+        return results
+
     async def fetch_parent_contexts(
         self,
         parent_ids: list[str],
