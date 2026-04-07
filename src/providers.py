@@ -57,6 +57,16 @@ class OllamaProvider(BaseLLMProvider):
             logger.error(f"Ollama async chat failed: {e}")
             raise LLMProviderError(f"Ollama async chat generation failed: {e}")
 
+    async def astream_chat(self, user_message: str, system_prompt: str, **kwargs):
+        try:
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+            async for chunk in self.llm.astream(messages):
+                if chunk.content:
+                    yield chunk.content
+        except Exception as e:
+            logger.error(f"Ollama stream chat failed: {e}")
+            raise LLMProviderError(f"Ollama stream chat generation failed: {e}")
+
 
 class OpenAIProvider(BaseLLMProvider):
     """LLM provider using OpenAI service."""
@@ -104,6 +114,16 @@ class OpenAIProvider(BaseLLMProvider):
         except Exception as e:
             logger.error(f"OpenAI async chat failed: {e}")
             raise LLMProviderError(f"OpenAI async chat generation failed: {e}")
+
+    async def astream_chat(self, user_message: str, system_prompt: str, **kwargs):
+        try:
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+            async for chunk in self.llm.astream(messages):
+                if chunk.content:
+                    yield chunk.content
+        except Exception as e:
+            logger.error(f"OpenAI stream chat failed: {e}")
+            raise LLMProviderError(f"OpenAI stream chat generation failed: {e}")
 
 
 class LLMProviderFactory:

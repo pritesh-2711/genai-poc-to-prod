@@ -123,17 +123,20 @@ class ChatService:
     async def get_response_async(
         self,
         user_message: str,
-        history: Optional[List[ChatRecord]] = None,
+        short_term_history: Optional[List[ChatRecord]] = None,
+        long_term_history: Optional[List[dict]] = None,
         rag_context: Optional[str] = None,
     ) -> str:
         """Asynchronously get a response from the LLM.
 
         Args:
-            user_message: The user's message.
-            history:      Prior chat records for the active session. Oldest first.
-            rag_context:  Retrieved document context to inject into the system
-                          prompt. Pass None (default) when no documents are
-                          uploaded or retrieval is unavailable.
+            user_message:       The user's message.
+            short_term_history: Last N ChatRecord objects (oldest first).
+            long_term_history:  Semantically relevant past exchange dicts from
+                                vector search (keys: sender, message, created_at).
+            rag_context:        Retrieved document context to inject into the
+                                system prompt. Pass None when no documents are
+                                uploaded or retrieval is unavailable.
 
         Returns:
             The LLM's response as a string.
@@ -151,7 +154,9 @@ class ChatService:
 
             response = await self.llm_provider.achat(
                 user_message=user_message,
-                system_prompt=self._build_system_prompt(history, rag_context),
+                system_prompt=self._build_system_prompt(
+                    short_term_history, long_term_history, rag_context
+                ),
             )
             logger.info("Successfully generated async response")
             return response
@@ -164,14 +169,21 @@ class ChatService:
 
     def _build_system_prompt(
         self,
-        history: Optional[List[ChatRecord]] = None,
+        short_term_history: Optional[List[ChatRecord]] = None,
+        long_term_history: Optional[List[dict]] = None,
         rag_context: Optional[str] = None,
     ) -> str:
-        """Compose the system prompt with optional RAG context and history.
+        """Compose the system prompt with RAG context and split memory.
+
+        Section order (closest to current message last):
+          base prompt → RAG excerpts → long-term (semantic) → short-term (recent)
 
         Args:
-            history:     Ordered list of prior ChatRecord objects.
-            rag_context: Retrieved document passages to ground the answer.
+            short_term_history: Last N ChatRecord objects, oldest first.
+            long_term_history:  Semantically similar past exchange dicts
+                                (keys: sender, message). Deduplicated against
+                                short-term by the caller.
+            rag_context:        Retrieved document passages.
 
         Returns:
             Full system prompt string.
@@ -188,21 +200,60 @@ class ChatService:
                 "--- End of Excerpts ---"
             )
 
-        if history:
-            history_lines = []
-            for record in history:
-                role_label = "User" if record.sender == "user" else "Assistant"
-                history_lines.append(f"{role_label}: {record.message}")
-            history_block = "\n".join(history_lines)
+        if long_term_history:
+            lt_lines = [
+                f"{'User' if r['sender'] == 'user' else 'Assistant'}: {r['message']}"
+                for r in long_term_history
+            ]
             parts.append(
-                "\n\nThe following is the conversation history for this session. "
-                "Use it to maintain context when responding.\n\n"
-                "--- Conversation History ---\n"
-                f"{history_block}\n"
-                "--- End of History ---"
+                "\n\nThe following are relevant past exchanges from earlier in this "
+                "session, retrieved by semantic similarity to the current question.\n\n"
+                "--- Relevant Past Exchanges ---\n"
+                + "\n".join(lt_lines) + "\n"
+                "--- End of Relevant Past Exchanges ---"
+            )
+
+        if short_term_history:
+            st_lines = [
+                f"{'User' if r.sender == 'user' else 'Assistant'}: {r.message}"
+                for r in short_term_history
+            ]
+            parts.append(
+                "\n\nThe following is the most recent conversation.\n\n"
+                "--- Recent Conversation ---\n"
+                + "\n".join(st_lines) + "\n"
+                "--- End of Recent Conversation ---"
             )
 
         return "".join(parts)
+
+    async def stream_response_async(
+        self,
+        user_message: str,
+        short_term_history: Optional[List[ChatRecord]] = None,
+        long_term_history: Optional[List[dict]] = None,
+        rag_context: Optional[str] = None,
+    ):
+        """Stream tokens from the LLM one chunk at a time.
+
+        Yields str chunks as they arrive from the provider.
+        Raises InputBlockedError if the input guard blocks the message.
+        """
+        if self.input_guard:
+            result = await self.input_guard.acheck(user_message)
+            if not result.passed:
+                raise InputBlockedError(
+                    f"Message blocked by {result.violated_guard} guard."
+                )
+
+        system_prompt = self._build_system_prompt(
+            short_term_history, long_term_history, rag_context
+        )
+        async for chunk in self.llm_provider.astream_chat(
+            user_message=user_message,
+            system_prompt=system_prompt,
+        ):
+            yield chunk
 
     def switch_provider(self, provider_name: str, model: Optional[str] = None) -> None:
         """Switch to a different LLM provider.
