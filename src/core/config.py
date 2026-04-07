@@ -102,6 +102,10 @@ class ConfigManager:
         return ChatConfig(
             system_prompt=chat_config.get("system_prompt", "You are a helpful assistant."),
             timeout=chat_config.get("timeout", 30),
+            short_term_limit=chat_config.get("short_term_limit", 10),
+            long_term_similarity_threshold=float(
+                chat_config.get("long_term_similarity_threshold", 0.70)
+            ),
         )
 
     def _build_db_config(self) -> DBConfig:

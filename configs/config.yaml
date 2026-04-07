@@ -37,6 +37,8 @@ llm:
 chat:
   system_prompt: "You are a helpful AI assistant specialized in discussing and analyzing research papers. Provide clear, accurate, and insightful responses."
   timeout: 60
+  short_term_limit: 10
+  long_term_similarity_threshold: 0.5  # minimum cosine similarity (0–1) for long-term memory hits
 
 # PostgreSQL connection — values can be overridden via environment variables.
 # Set the corresponding env vars in your .env file for secrets.
