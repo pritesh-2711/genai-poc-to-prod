@@ -24,3 +24,12 @@ class BaseLLMProvider(ABC):
     @abstractmethod
     async def achat(self, user_message: str, system_prompt: str, **kwargs) -> str:
         pass
+
+    async def astream_chat(self, user_message: str, system_prompt: str, **kwargs):
+        """Stream tokens from the LLM. Yields str chunks.
+
+        Default implementation falls back to achat (no streaming).
+        Override in subclasses that support native streaming.
+        """
+        full = await self.achat(user_message, system_prompt, **kwargs)
+        yield full
