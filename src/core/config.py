@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yaml
 
 from .exceptions import ConfigurationError
-from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig
+from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig, RerankerConfig
 
 
 class ConfigManager:
@@ -33,6 +33,7 @@ class ConfigManager:
         self.db_config = self._build_db_config()
         self.guardrails_config = self._build_guardrails_config()
         self.embedding_config = self._build_embedding_config()
+        self.reranker_config = self._build_reranker_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -191,6 +192,20 @@ class ConfigManager:
             prompt_injection=input_cfg.get("prompt_injection", True),
             jailbreaking=input_cfg.get("jailbreaking", True),
             evaluator_model=gr.get("evaluator_model", "gpt-4o-mini"),
+        )
+
+    def _build_reranker_config(self) -> RerankerConfig:
+        """Build reranker configuration from config file.
+
+        Returns:
+            RerankerConfig object with cross-encoder settings.
+        """
+        rr = self.config.get("reranker", {})
+        return RerankerConfig(
+            enabled=rr.get("enabled", True),
+            model=rr.get("model", "BAAI/bge-reranker-base"),
+            top_k=rr.get("top_k", 5),
+            device=rr.get("device", "cpu"),
         )
 
     def get(self, key: str, default: Any = None) -> Any:

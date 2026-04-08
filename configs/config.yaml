@@ -54,6 +54,12 @@ logging:
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "logs/app.log"
 
+reranker:
+  enabled: true
+  model: "BAAI/bge-reranker-base"  # Options: bge-reranker-base, bge-reranker-large, bge-reranker-v2-m3
+  top_k: 5                          # chunks to keep after reranking
+  device: "cpu"                     # "cpu" or "cuda"
+
 guardrails:
   # Set to false to disable all guardrail checks
   enabled: false

@@ -26,6 +26,7 @@ from ..databases.pipeline import IngestionPipeline
 from ..databases.retrieval import PgVectorRetrievalRepository
 from ..embedding.base import BaseEmbedder
 from ..memory.repository import AuthenticationError, MemoryRepository, MemoryRepositoryError
+from ..orchestrators import RAGOrchestrator
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -52,6 +53,16 @@ def get_chat_service(request: Request) -> ChatService:
 def get_embedder(request: Request) -> BaseEmbedder:
     """Return the embedder singleton (loaded once at startup)."""
     return request.app.state.embedder
+
+
+def get_orchestrator(request: Request) -> RAGOrchestrator:
+    """Return the RAGOrchestrator singleton (compiled once at startup)."""
+    return request.app.state.orchestrator
+
+
+def get_pending_clarifications(request: Request) -> dict[str, str]:
+    """Return the in-process pending-clarifications mapping (session_id → thread_id)."""
+    return request.app.state.pending_clarifications
 
 
 # ---------------------------------------------------------------------------

@@ -340,8 +340,9 @@ class MemoryRepository:
         sender: str,
         message: str,
         embedding: list[float] | None = None,
+        metadata: dict | None = None,
     ) -> ChatRecord:
-        """Persist a chat message, optionally storing its embedding vector.
+        """Persist a chat message, optionally storing its embedding and orchestrator metadata.
 
         Args:
             session_id: UUID of the session.
@@ -349,30 +350,33 @@ class MemoryRepository:
             message:    Message text.
             embedding:  Float vector to store in the embeddings column. Pass None
                         to leave the column NULL (e.g. for blocked/error replies).
+            metadata:   Optional dict stored in orchestrator_metadata JSONB column.
+                        Used to track mode, query_complexity, iterations, etc.
         """
+        import json as _json
+
         conn = self._connect()
         try:
             cur = conn.cursor(cursor_factory=RealDictCursor)
             try:
-                if embedding is not None:
-                    vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
-                    cur.execute(
-                        """
-                        INSERT INTO poc2prod.chats (session_id, sender, message, embeddings)
-                        VALUES (%s, %s, %s, %s::vector)
-                        RETURNING chat_id, session_id, sender, message, created_at;
-                        """,
-                        (str(session_id), sender, message, vec_str),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO poc2prod.chats (session_id, sender, message)
-                        VALUES (%s, %s, %s)
-                        RETURNING chat_id, session_id, sender, message, created_at;
-                        """,
-                        (str(session_id), sender, message),
-                    )
+                vec_str = (
+                    "[" + ",".join(str(v) for v in embedding) + "]"
+                    if embedding is not None
+                    else None
+                )
+                meta_str = _json.dumps(metadata) if metadata else None
+
+                cur.execute(
+                    """
+                    INSERT INTO poc2prod.chats
+                        (session_id, sender, message, embeddings, orchestrator_metadata)
+                    VALUES (%s, %s, %s,
+                            %s::vector,
+                            %s::jsonb)
+                    RETURNING chat_id, session_id, sender, message, created_at;
+                    """,
+                    (str(session_id), sender, message, vec_str, meta_str),
+                )
                 row = cur.fetchone()
                 conn.commit()
             except Exception as e:
