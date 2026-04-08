@@ -13,6 +13,10 @@ from ..chat_service import ChatService
 from ..core.config import ConfigManager
 from ..embedding import LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
 from ..guardrails import InputGuard
+from ..memory.repository import MemoryRepository
+from ..databases.retrieval import PgVectorRetrievalRepository
+from ..orchestrators import RAGOrchestrator
+from ..reranker import CrossEncoderReranker
 from .auth import router as auth_router
 from .chat import router as chat_router
 from .documents import router as documents_router
@@ -58,14 +62,37 @@ async def lifespan(app: FastAPI):
     }
     embedder = _embedder_map[emb_cfg.provider]()
 
+    # Reranker — loaded once at startup (model weights cached in memory)
+    rr_cfg = config.reranker_config
+    reranker = CrossEncoderReranker(model=rr_cfg.model, device=rr_cfg.device)
+
+    # RAGOrchestrator — composes fast + deep subgraphs with a shared checkpointer.
+    # MemoryRepository and PgVectorRetrievalRepository are created here for the
+    # orchestrator's internal use (memory reads); the API also creates per-request
+    # instances for message persistence.
+    orchestrator = RAGOrchestrator(
+        embedder=embedder,
+        retrieval_repo=PgVectorRetrievalRepository(config.db_config),
+        reranker=reranker,
+        chat_service=chat_service,
+        memory_repo=MemoryRepository(config.db_config),
+        reranker_config=rr_cfg,
+        chat_config=config.chat_config,
+    )
+
     app.state.config = config
     app.state.chat_service = chat_service
     app.state.embedder = embedder
+    app.state.orchestrator = orchestrator
+    # Maps session_id_str → thread_id_str for interrupted (clarification) graphs.
+    # Scoped to a single process; for multi-worker deployments use Redis/DB.
+    app.state.pending_clarifications: dict[str, str] = {}
 
     logger.info(
         f"Application startup complete. "
         f"LLM={config.llm_config.provider}/{config.llm_config.model}, "
-        f"Embedder={emb_cfg.provider}/{emb_cfg.model}"
+        f"Embedder={emb_cfg.provider}/{emb_cfg.model}, "
+        f"Reranker={rr_cfg.model}"
     )
     yield
     logger.info("Application shutdown.")
