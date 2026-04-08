@@ -52,6 +52,16 @@ class GuardrailsConfig:
 
 
 @dataclass
+class RerankerConfig:
+    """Configuration for the cross-encoder reranker."""
+
+    enabled: bool = True
+    model: str = "BAAI/bge-reranker-base"
+    top_k: int = 5
+    device: str = "cpu"
+
+
+@dataclass
 class DBConfig:
     """Configuration for PostgreSQL database."""
 
