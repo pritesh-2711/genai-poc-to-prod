@@ -61,12 +61,14 @@ CREATE TABLE poc2prod.sessions (
 -- ============================================================================
 
 CREATE TABLE poc2prod.chats (
-    chat_id    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id UUID NOT NULL REFERENCES poc2prod.sessions(session_id) ON DELETE CASCADE,
-    sender     TEXT NOT NULL CHECK (sender IN ('user', 'assistant')),
-    message    TEXT NOT NULL,
-    embeddings VECTOR,       -- dimension matches active embedder provider (see config.yaml)
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    chat_id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id             UUID NOT NULL REFERENCES poc2prod.sessions(session_id) ON DELETE CASCADE,
+    sender                 TEXT NOT NULL CHECK (sender IN ('user', 'assistant')),
+    message                TEXT NOT NULL,
+    embeddings             VECTOR,       -- dimension matches active embedder provider (see config.yaml)
+    -- Orchestrator metadata: mode, query_complexity, iteration count, validation result, etc.
+    orchestrator_metadata  JSONB DEFAULT '{}'::jsonb,
+    created_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ============================================================================

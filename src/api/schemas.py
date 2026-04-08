@@ -5,7 +5,7 @@ app can consume responses without any transformation layer.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr
@@ -65,6 +65,7 @@ class SessionResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     message: str
+    mode: Literal["fast", "deep"] = "fast"
 
 
 class ChatMessageResponse(BaseModel):
