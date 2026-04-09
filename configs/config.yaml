@@ -4,7 +4,7 @@ app:
   debug: false
 
 embeddings:
-  provider: "ollama" # Options: "local", "ollama", "openai"
+  provider: "openai" # Options: "local", "ollama", "openai"
   local:
     model: "sentence-transformers/all-MiniLM-L6-v2"
     dimension: 384
@@ -62,7 +62,7 @@ reranker:
 
 guardrails:
   # Set to false to disable all guardrail checks
-  enabled: false
+  enabled: true
   # Model used by DeepEval to judge metrics. Use a fast cheap model to minimise
   # latency overhead. All metrics run concurrently so cost = 3 parallel calls.
   evaluator_model: "gpt-4o-mini"
