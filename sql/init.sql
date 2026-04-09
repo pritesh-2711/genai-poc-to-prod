@@ -36,6 +36,7 @@ CREATE TABLE poc2prod.users (
     name         VARCHAR(255),
     email        VARCHAR(255) NOT NULL UNIQUE,
     password     TEXT NOT NULL,
+    status       VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     created_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP

@@ -11,9 +11,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..core.models import UserRecord
-from ..memory.repository import AuthenticationError, MemoryRepository, MemoryRepositoryError
+from ..memory.repository import AuthenticationError, MemoryRepository, MemoryRepositoryError, UserNotApprovedError
 from .deps import create_access_token, get_current_user, get_repo
-from .schemas import SignInRequest, SignUpRequest, TokenResponse, UserResponse
+from .schemas import SignInRequest, SignUpRequest, SignUpResponse, TokenResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,20 +27,22 @@ def _to_user_response(user: UserRecord) -> UserResponse:
     )
 
 
-@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/signup", response_model=SignUpResponse, status_code=status.HTTP_201_CREATED)
 def signup(
     body: SignUpRequest,
     repo: Annotated[MemoryRepository, Depends(get_repo)],
 ):
-    """Register a new user account."""
+    """Register a new user account. Account is pending admin approval."""
     try:
-        user = repo.create_user(name=body.name, email=body.email, password=body.password)
+        repo.create_user(name=body.name, email=body.email, password=body.password)
     except ValueError as e:
-        # create_user raises ValueError if email already exists
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except MemoryRepositoryError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    return _to_user_response(user)
+    return SignUpResponse(
+        message="Registration successful. Your account is awaiting admin approval.",
+        status="pending",
+    )
 
 
 @router.post("/signin", response_model=TokenResponse)
@@ -51,6 +53,12 @@ def signin(
     """Authenticate and return a JWT access token."""
     try:
         user = repo.authenticate_user(email=body.email, password=body.password)
+    except UserNotApprovedError as e:
+        if e.account_status == "pending":
+            detail = "Your account is awaiting admin approval."
+        else:
+            detail = "Your account access has been declined. Please contact the admin."
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
     except AuthenticationError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
