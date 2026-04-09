@@ -24,6 +24,14 @@ class AuthenticationError(ResearchPaperChatException):
     pass
 
 
+class UserNotApprovedError(ResearchPaperChatException):
+    """Raised when a user exists but their account has not been approved yet."""
+
+    def __init__(self, account_status: str):
+        super().__init__(f"Account status: {account_status}")
+        self.account_status = account_status  # 'pending' or 'rejected'
+
+
 class MemoryRepository:
     """Handles all database interactions for users, sessions, and chat history.
 
@@ -134,7 +142,7 @@ class MemoryRepository:
             cur = conn.cursor(cursor_factory=RealDictCursor)
             try:
                 cur.execute(
-                    "SELECT user_id, name, email, password, created_at FROM poc2prod.users WHERE email = %s;",
+                    "SELECT user_id, name, email, password, status, created_at FROM poc2prod.users WHERE email = %s;",
                     (email,),
                 )
                 row = cur.fetchone()
@@ -147,6 +155,9 @@ class MemoryRepository:
 
             if not bcrypt.checkpw(password.encode("utf-8"), row["password"].encode("utf-8")):
                 raise AuthenticationError("Invalid email or password.")
+
+            if row["status"] != "approved":
+                raise UserNotApprovedError(row["status"])
 
             try:
                 cur.execute(

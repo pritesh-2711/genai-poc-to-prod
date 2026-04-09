@@ -26,6 +26,11 @@ class SignInRequest(BaseModel):
     password: str
 
 
+class SignUpResponse(BaseModel):
+    message: str
+    status: str = "pending"
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
