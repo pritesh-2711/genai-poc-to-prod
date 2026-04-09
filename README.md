@@ -1,11 +1,10 @@
 # Research Paper Chat Application
 
-A production-oriented chat application built step by step — from a bare LLM call to a multi-user API with memory, document ingestion, RAG retrieval, and guardrails.
+A production-oriented RAG chat application built step by step — from a bare LLM call to a multi-user API with memory, document ingestion, hierarchical retrieval, reranking, and LangGraph-based orchestration.
 
 ## Quick Start
 
 ```bash
-python main.py          # CLI mode
 python api_server.py    # REST API (FastAPI + Uvicorn)
 ```
 
@@ -67,14 +66,16 @@ Each branch adds one capability on top of the previous. Follow them in order.
   - `poc2prod.ingestions` — small child chunks with `VECTOR` embeddings (searched at query time)
   - `poc2prod.chats` — gains an `embeddings VECTOR` column; now actively written on every message for long-term memory search
   - `VECTOR` (no fixed dimension) used throughout — dimension enforced in application layer via `EmbeddingConfig`
+
+### Branch: `feature/langgraph`
+
+- Read `notebooks/explore_langgraph.ipynb` — explores LangGraph concepts: StateGraph, conditional edges, Send API (fan-out), `interrupt()` for HITL, and `MemorySaver` checkpointing
+- Read `docs/design_intuition.md` (Part 4) — explains the Fast/Deep orchestrator design, reranker abstraction, and HITL pattern
 - Application changes:
-  - `src/databases/pipeline.py` — `IngestionPipeline.run()` orchestrates extract → chunk → embed → ingest in one async call
-  - `src/databases/ingestion.py` — `PgVectorIngestionRepository` (asyncpg) inserts parent + child rows
-  - `src/databases/retrieval.py` — `PgVectorRetrievalRepository` (asyncpg) performs cosine search and parent context fetch
-  - `src/api/upload.py` — accepts PDF/DOCX, saves to `storage/{user_id}/active/{session_id}/`, runs pipeline, returns chunk counts
-  - `src/api/chat.py` — embeds query, retrieves top-K session-scoped chunks, fetches parent contexts, injects RAG block into system prompt
-  - `src/chat_service.py` — `get_response_async()` accepts `rag_context` injected before conversation history in the system prompt
-  - `src/api/loader.py` — storage layout is `storage/{user_id}/active|archive/{session_id}/`
+  - `src/orchestrators/` — LangGraph-based `FastOrchestrator` and `DeepOrchestrator`, composed by `RAGOrchestrator`
+  - `src/reranker/` — `CrossEncoderReranker` (BGE) sitting behind `BaseReranker`, configurable via `configs/config.yaml`
+  - `src/api/chat.py` — SSE streaming endpoint (`GET /sessions/{id}/stream`) with per-node status events in deep mode
+  - UI — fast/deep mode toggle, node status shown next to typing indicator in deep mode
 
 ----
 
@@ -86,6 +87,7 @@ Each branch adds one capability on top of the previous. Follow them in order.
 - Harmful content and jailbreaking are not handled
 - No way to evaluate response quality
 - Not built for multiple users
+- Anyone who signs up can immediately access the system
 
 ## Checklist we are solving throughout this repo
 
@@ -105,17 +107,39 @@ Each branch adds one capability on top of the previous. Follow them in order.
 
 - [x] **Memory** — PostgreSQL-backed conversation history per user per session. Split into short-term (last N messages, bounded by `short_term_limit`) and long-term (cosine similarity search over embedded chat history, gated by session length and `long_term_similarity_threshold`). Duplicates between layers are removed before the system prompt is assembled.
 - [x] **Multi-user support** — JWT-authenticated REST API. Each user sees only their own sessions and messages.
-- [x] **Guardrails** — DeepEval metrics (`ToxicityMetric`, `BiasMetric`, `GEval`) run concurrently before every LLM call. Blocked messages return a friendly assistant reply, not an error.
+- [x] **Guardrails** — DeepEval metrics (`ToxicityMetric`, `BiasMetric`, `GEval`) run concurrently before every LLM call. Blocked messages return a friendly assistant reply, not an error. Configurable via `guardrails:` block in `configs/config.yaml`.
 - [x] **RAG** — PDF/DOCX upload → extraction → hierarchical chunking → embedding → pgvector storage → cosine retrieval → parent-document context → grounded LLM response. Fully session-scoped.
+- [x] **Reranker** — Cross-encoder (`BAAI/bge-reranker-base`) re-scores retrieved chunks before passing context to the LLM. Configurable model, `top_k`, and device via `reranker:` block in `configs/config.yaml`.
+- [x] **LangGraph orchestration** — Two execution modes selectable per request:
+  - **Fast mode** — resolve memory → retrieve → rerank → generate. No extra LLM calls. Optimised for latency.
+  - **Deep mode** — intent analysis → optional HITL clarification (via `interrupt()`) → complexity routing → query rewrite or decomposition (Send API fan-out) → retrieve → rerank → generate → LLM-as-judge validation loop (max 3 iterations, best-response fallback).
+- [x] **SSE streaming** — Token-level streaming via `GET /sessions/{id}/stream`. Deep mode also emits `status` events naming the current node (e.g., "Checking query intent…", "Ranking relevant results…").
+- [x] **Admin-gated signup** — New registrations land as `status='pending'`. Users cannot sign in until an admin sets their status to `'approved'` via a direct SQL update. Rejected users receive a clear message on sign-in attempt.
 
 ## Still to address
 
-- [ ] Query Analysis / Intent detection
 - [ ] Feedback Learning
 - [ ] Post-LLM Evaluations (response quality, hallucination, relevance)
 - [ ] Tool calling
-- [ ] Workflows
-- [ ] Agents
+- [ ] True token-level streaming (replace word-split with `stream_mode="messages"`)
+- [ ] Show decomposed sub-queries to user before retrieval runs
+
+----
+
+## Admin: approving users
+
+New signups are stored with `status = 'pending'`. To approve or reject a user, run a direct SQL query against the database:
+
+```sql
+-- Approve a user
+UPDATE poc2prod.users SET status = 'approved' WHERE email = 'user@example.com';
+
+-- Reject a user
+UPDATE poc2prod.users SET status = 'rejected' WHERE email = 'user@example.com';
+
+-- List all pending requests
+SELECT user_id, name, email, created_at FROM poc2prod.users WHERE status = 'pending' ORDER BY created_at;
+```
 
 ----
 
