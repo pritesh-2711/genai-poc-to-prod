@@ -407,3 +407,151 @@ Or when the guard fires:
 | Guard on session length | Prevents wasted vector search on short sessions where short-term already covers everything |
 | Reuse `query_vec` across RAG and long-term search | Embed once per turn regardless of how many retrieval systems consume the vector |
 | Blocked replies stored without embeddings | Toxic/blocked exchanges should not influence future semantic retrieval |
+
+---
+
+## Part 4 — LangGraph Orchestration, Reranking, and Access Control
+
+### Why an Orchestrator Layer
+
+The earlier RAG pipeline was a fixed linear sequence: embed → retrieve → generate. This works for simple factual queries but breaks down for:
+
+- **Ambiguous or multi-part questions** — a single retrieval pass over a poorly-phrased query returns noisy chunks
+- **Complex research questions** — multiple sub-topics need independent retrieval threads
+- **Quality control** — there is no feedback loop to catch weak or hallucinated answers
+
+The orchestrator layer adds intelligence before and after retrieval, without coupling that logic to the HTTP handler.
+
+### Fast vs. Deep Mode
+
+Two modes are exposed via the `mode` field in `SendMessageRequest`:
+
+```
+mode: "fast"   (default) — optimised for latency
+mode: "deep"              — optimised for answer quality
+```
+
+#### Fast Mode Graph
+
+```
+resolve_memory → retrieve → rerank_and_build_context → generate
+```
+
+No extra LLM calls. Memory is resolved once and injected into the generation system prompt. Retrieval and reranking happen in sequence. This path adds no more than one extra LLM call beyond baseline.
+
+#### Deep Mode Graph
+
+```
+resolve_memory
+  → analyze_query          (LLM: intent, complexity, clarity)
+      ├─ unclear intent  → query_clarification  (interrupt, await user)
+      └─ clear intent
+            ├─ low complexity  → (same as fast from here)
+            └─ high complexity
+                  ├─ single topic  → query_rewrite → retrieve
+                  └─ multi-topic   → query_decompose → [retrieve_sub_query × N fan-out]
+  → rerank_and_build_context
+  → generate
+  → validate_response      (LLM-as-judge)
+      ├─ pass  → finalize
+      └─ fail  → correction → generate  (loop, max 3 iterations; returns best_response on cap)
+```
+
+#### Key design choices
+
+**Low complexity in deep mode is treated as fast mode.** An explicit `analyze_query` LLM call already happened, so the cost is sunk. The value of deep mode's query rewrite and validation only justifies itself for complex questions — simple ones get routed directly to retrieval.
+
+**`route_complexity` is a pass-through node, not a function.** LangGraph requires a named node to attach conditional edges from. `lambda s: s` is the node body; the routing logic lives in the conditional edge function attached to it.
+
+**`interrupt()` for HITL.** When intent is unclear, the graph calls `interrupt(clarification_question)`. This pauses the graph and serialises state to `MemorySaver`. The SSE endpoint detects the interrupt via `graph.get_state(thread_id).next`, emits a `clarification` event to the frontend, and stores `session_id → thread_id` in `app.state.pending_clarifications`. The user's reply arrives on the next POST; `Command(resume=user_reply)` resumes the paused graph from the exact point it stopped.
+
+**`raw_chunks: Annotated[list[dict], operator.add]`** — the `operator.add` reducer lets all parallel `retrieve_sub_query` nodes (spawned via `Send`) accumulate their results into a single list without conflict.
+
+**Validation loop cap.** `iteration_count` is incremented on each `correction → generate` cycle. When `iteration_count >= 3`, the loop exits and returns `best_response` (the highest-quality answer seen so far) rather than the potentially degraded final answer.
+
+**Memory injection at generation only.** Short-term and long-term memory are resolved once (`resolve_memory` node) and injected into the system prompt only at the `generate` node — not into the retrieval query. Using conversation context to bias retrieval tends to over-weight recent exchanges and under-weight document relevance.
+
+### Reranker
+
+The retrieval step returns the top-K chunks by cosine similarity. Cosine similarity alone is a weak signal — it scores embedding space proximity, not semantic relevance to the specific query phrasing.
+
+A cross-encoder reranker rescores `(query, passage)` pairs jointly: the query and passage are passed together as a single input, so the model can attend across both. This is slower than bi-encoder similarity but produces much more accurate relevance scores.
+
+```
+BaseReranker
+  └── CrossEncoderReranker          (sentence-transformers CrossEncoder)
+```
+
+`CrossEncoderReranker.rerank(query, chunks, top_k)`:
+1. Builds `(query, chunk_content)` pairs
+2. Calls `model.predict(pairs)` — one forward pass per pair
+3. Sorts descending by score, adds `rerank_score` key to each dict
+4. Returns top-k chunks
+
+Configuration in `configs/config.yaml`:
+
+```yaml
+reranker:
+  enabled: true
+  model: "BAAI/bge-reranker-base"   # bge-reranker-base | bge-reranker-large | bge-reranker-v2-m3
+  top_k: 5
+  device: "cpu"                      # or "cuda"
+```
+
+Switching the model requires only a config change — no code changes.
+
+### SSE Streaming and Per-Node Status
+
+The `stream_message` endpoint uses `graph.astream(stream_mode="updates", subgraphs=True)`. Each yielded item is a `(namespace_tuple, {node_name: state_delta})` tuple.
+
+- **Outer graph nodes** have `namespace = ()`
+- **Inner subgraph nodes** (FastOrchestrator, DeepOrchestrator) have a non-empty namespace
+
+`_DEEP_NODE_STATUS` maps node names to human-readable status strings. The endpoint:
+1. Emits a `status` SSE event when the mapped string changes (deduplicated to avoid repeating "Searching documents…" three times for decomposed queries)
+2. Does not emit a status event for nodes mapped to `None` (`query_clarification`, `finalize`)
+3. After streaming completes, calls `get_graph_state()` to read the final state and emit the accumulated response as `token` events
+
+In **fast mode**, status events are suppressed entirely — answers arrive fast enough that progress indicators would flash and disappear before the user reads them.
+
+### Database Changes for Orchestration
+
+The `chats` table gains an `orchestrator_metadata JSONB` column (default `'{}'::jsonb`) that stores per-message orchestration data such as `mode`, `query_intent`, `query_complexity`, and `iteration_count`. An index on `orchestrator_metadata->>'mode'` supports future analytics queries.
+
+### User Access Control
+
+#### The Problem
+
+Without access control, anyone who can reach the signup endpoint can immediately begin using the application. For a private deployment this is unacceptable — it exposes the LLM and document store to arbitrary users.
+
+#### The Design
+
+New signups are stored with `status = 'pending'` in the `users` table. The admin approves or rejects requests by running a direct SQL update. This requires no admin UI and leaves a clear audit trail in the database.
+
+```sql
+-- users table gains:
+status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected'))
+```
+
+**Signup** — always returns HTTP 201 with a `{ message, status: "pending" }` response. No token is issued. The frontend shows a "request submitted, awaiting approval" screen.
+
+**Sign-in** — `authenticate_user()` checks `status` after verifying the password:
+- `'pending'` → `UserNotApprovedError("pending")` → HTTP 403 "Your account is awaiting admin approval."
+- `'rejected'` → `UserNotApprovedError("rejected")` → HTTP 403 "Your account access has been declined."
+- `'approved'` → proceeds normally, issues JWT
+
+The password is checked before the status check so that the error message for a wrong password (`401 Invalid email or password`) leaks no information about whether the email is registered.
+
+**Admin workflow:**
+
+```sql
+-- See all pending requests
+SELECT user_id, name, email, created_at FROM poc2prod.users WHERE status = 'pending' ORDER BY created_at;
+
+-- Approve
+UPDATE poc2prod.users SET status = 'approved' WHERE email = 'user@example.com';
+
+-- Reject
+UPDATE poc2prod.users SET status = 'rejected' WHERE email = 'user@example.com';
+```
