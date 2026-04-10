@@ -62,6 +62,18 @@ class RerankerConfig:
 
 
 @dataclass
+class StorageConfig:
+    """Configuration for file storage and distributed state backends."""
+
+    deployment: str               # "local" | "cloud"
+    cloud_provider: Optional[str] = None  # "aws" | "azure" | "gcp"
+    # AWS-specific
+    aws_s3_bucket: Optional[str] = None
+    aws_s3_region: Optional[str] = None
+    aws_redis_url: Optional[str] = None
+
+
+@dataclass
 class DBConfig:
     """Configuration for PostgreSQL database."""
 

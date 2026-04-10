@@ -22,7 +22,7 @@ from ..core.models import UserRecord
 from ..databases.pipeline import IngestionPipeline, IngestionPipelineError
 from ..memory.repository import MemoryRepository, MemoryRepositoryError
 from .deps import get_current_user, get_ingestion_pipeline, get_repo
-from .loader import FileLoader
+from .loader import BaseFileLoader
 from .schemas import UploadResponse
 
 router = APIRouter(prefix="/sessions", tags=["upload"])
@@ -42,6 +42,7 @@ _MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 )
 async def upload_file(
     session_id: UUID,
+    request: Request,
     file: UploadFile,
     current_user: Annotated[UserRecord, Depends(get_current_user)],
     repo: Annotated[MemoryRepository, Depends(get_repo)],
@@ -101,9 +102,9 @@ async def upload_file(
     filename = file.filename or "upload"
 
     # ------------------------------------------------------------------
-    # Save to active storage
+    # Save to active storage (local path or S3 + tempfile)
     # ------------------------------------------------------------------
-    loader = FileLoader()
+    loader: BaseFileLoader = request.app.state.file_loader
     saved_path = loader.save(
         file_content=content,
         filename=filename,
@@ -113,6 +114,7 @@ async def upload_file(
 
     # ------------------------------------------------------------------
     # Extract → chunk → embed → ingest
+    # cleanup_temp() removes the tempfile for S3; no-op for local.
     # ------------------------------------------------------------------
     try:
         result = await pipeline.run(
@@ -127,6 +129,8 @@ async def upload_file(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Ingestion failed: {exc}",
         )
+    finally:
+        loader.cleanup_temp(saved_path)
 
     return UploadResponse(
         session_id=session_id,

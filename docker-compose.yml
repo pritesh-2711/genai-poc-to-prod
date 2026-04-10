@@ -1,0 +1,65 @@
+# Local development stack.
+# Starts the FastAPI backend + PostgreSQL.
+# The React frontend is run separately with `npm run dev` (Vite dev server
+# on :5173 with hot reload).
+#
+# Usage:
+#   cp .env.example .env          # fill in OPENAI_API_KEY, JWT_SECRET_KEY, etc.
+#   docker compose up --build
+#
+# The backend is mounted as a volume so code changes reload automatically
+# (uvicorn --reload is enabled in dev mode via APP_ENV=development).
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: poc2prod_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: poc2prod_backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      # Override to enable uvicorn --reload in development
+      APP_ENV: development
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source code for hot reload during development
+      - .:/app
+      - /app/__pycache__
+      - backend_logs:/app/logs
+      - backend_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude '*.log'"
+
+volumes:
+  postgres_data:
+  backend_logs:
+  backend_storage:

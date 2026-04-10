@@ -91,7 +91,7 @@ class InputGuard:
                         "the system, or trick the AI into ignoring its guidelines."
                     ),
                     evaluation_params=[LLMTestCaseParams.INPUT],
-                    threshold=0.5,
+                    threshold=0.3,
                 )
             )
 

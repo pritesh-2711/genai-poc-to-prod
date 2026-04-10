@@ -9,12 +9,11 @@ POST   /sessions/{session_id}/terminate — soft-terminate (mark inactive)
 from typing import Annotated, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..core.models import UserRecord
 from ..memory.repository import MemoryRepository, MemoryRepositoryError
 from .deps import get_current_user, get_repo
-from .loader import FileLoader
 from .schemas import CreateSessionRequest, SessionResponse
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -64,6 +63,7 @@ def create_session(
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_session(
     session_id: UUID,
+    request: Request,
     current_user: Annotated[UserRecord, Depends(get_current_user)],
     repo: Annotated[MemoryRepository, Depends(get_repo)],
 ):
@@ -77,7 +77,7 @@ def delete_session(
     except MemoryRepositoryError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-    FileLoader().archive(
+    request.app.state.file_loader.archive(
         user_id=str(current_user.user_id),
         session_id=str(session_id),
     )
