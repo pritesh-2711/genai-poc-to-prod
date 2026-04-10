@@ -1,32 +1,128 @@
 """File storage management for uploaded documents.
 
-FileLoader manages the lifecycle of uploaded files on the local filesystem:
+Two implementations share the BaseFileLoader interface:
 
-    Active files   → storage/{user_id}/active/{session_id}/{filename}
-    Archived files → storage/{user_id}/archive/{session_id}/{filename}
+    LocalFileLoader — saves files to disk under storage/{user_id}/active/{session_id}/
+                      Active → archive on session delete.
+                      cleanup_temp() is a no-op (file persists on disk).
 
-When a session is deleted the entire session folder is moved from active to
-archive.  FileLoader is only used by the API layer; the extraction module
-receives the stored file path and does not interact with FileLoader directly.
+    S3FileLoader    — uploads files permanently to S3 at {user_id}/active/{session_id}/{filename}.
+                      Also writes a tempfile for Docling (which needs a local path).
+                      cleanup_temp() deletes the tempfile after ingestion completes.
+                      archive() copies S3 objects from active/ to archive/ prefix then deletes originals.
+
+The active implementation is wired in main.py based on config.storage_config.deployment.
 """
 
 import shutil
+import tempfile
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 
-class FileLoader:
-    """Handles saving, retrieving, and archiving uploaded files.
+class BaseFileLoader(ABC):
+    """Abstract file storage interface.
 
-    Args:
-        base_dir: Root storage directory. Defaults to "storage" (relative to
-                  the working directory when the API server is started).
+    Callers must:
+      1. Call save() to store the file and get a local Path suitable for Docling.
+      2. After the ingestion pipeline finishes, call cleanup_temp() on that path.
+         For local storage this is a no-op; for cloud storage it deletes the tempfile.
+    """
+
+    @abstractmethod
+    def save(
+        self,
+        file_content: bytes,
+        filename: str,
+        user_id: str,
+        session_id: str,
+    ) -> Path:
+        """Persist the file and return a local Path for the ingestion pipeline."""
+
+    def cleanup_temp(self, path: Path) -> None:
+        """Remove any temporary file created during save().
+
+        Default is a no-op — override in cloud implementations where save()
+        writes a tempfile that should not persist after ingestion.
+        """
+
+    @abstractmethod
+    def list_files(self, user_id: str, session_id: str) -> list:
+        """Return the stored files for a session (paths or S3 keys)."""
+
+    @abstractmethod
+    def archive(self, user_id: str, session_id: str) -> None:
+        """Move a session's files to archive storage.  Called on session delete."""
+
+
+# ---------------------------------------------------------------------------
+# Local implementation
+# ---------------------------------------------------------------------------
+
+class LocalFileLoader(BaseFileLoader):
+    """Stores uploaded files on the local filesystem.
+
+    Layout:
+        storage/{user_id}/active/{session_id}/{filename}   ← active
+        storage/{user_id}/archive/{session_id}/{filename}  ← after session deleted
     """
 
     def __init__(self, base_dir: str = "storage") -> None:
         self._base = Path(base_dir)
 
+    def save(
+        self,
+        file_content: bytes,
+        filename: str,
+        user_id: str,
+        session_id: str,
+    ) -> Path:
+        dest_dir = self._base / user_id / "active" / session_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = dest_dir / filename
+        dest_path.write_bytes(file_content)
+        return dest_path.resolve()
+
+    # cleanup_temp() — inherited no-op; file stays on disk.
+
+    def list_files(self, user_id: str, session_id: str) -> list[Path]:
+        active_dir = self._base / user_id / "active" / session_id
+        if not active_dir.exists():
+            return []
+        return [p for p in active_dir.iterdir() if p.is_file()]
+
+    def archive(self, user_id: str, session_id: str) -> None:
+        src = self._base / user_id / "active" / session_id
+        if not src.exists():
+            return
+        dest = self._base / user_id / "archive" / session_id
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+
+
+# ---------------------------------------------------------------------------
+# AWS S3 implementation
+# ---------------------------------------------------------------------------
+
+class S3FileLoader(BaseFileLoader):
+    """Stores uploaded files in AWS S3.
+
+    S3 key layout:
+        {user_id}/active/{session_id}/{filename}   ← active
+        {user_id}/archive/{session_id}/{filename}  ← after session deleted
+
+    save() uploads to S3 for permanent storage AND writes a NamedTemporaryFile
+    so Docling (which needs a real file path) can process the file.
+    The caller must call cleanup_temp(path) after the ingestion pipeline finishes.
+    """
+
+    def __init__(self, bucket: str, region: str) -> None:
+        import boto3
+        self._bucket = bucket
+        self._s3 = boto3.client("s3", region_name=region)
+
     # ------------------------------------------------------------------
-    # Public API
+    # Interface
     # ------------------------------------------------------------------
 
     def save(
@@ -36,53 +132,44 @@ class FileLoader:
         user_id: str,
         session_id: str,
     ) -> Path:
-        """Write an uploaded file to active storage.
+        # Persist permanently in S3
+        key = self._active_key(user_id, session_id, filename)
+        self._s3.put_object(Bucket=self._bucket, Key=key, Body=file_content)
 
-        Args:
-            file_content: Raw bytes of the uploaded file.
-            filename:     Original filename (used as the stored filename).
-            user_id:      User identifier — becomes a path segment.
-            session_id:   Session identifier — becomes a path segment.
+        # Write a tempfile for the ingestion pipeline (Docling needs a local path)
+        suffix = Path(filename).suffix or ".tmp"
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp.write(file_content)
+        tmp.close()
+        return Path(tmp.name)
 
-        Returns:
-            Absolute Path to the saved file.
-        """
-        dest_dir = self._active_dir(user_id, session_id)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = dest_dir / filename
-        dest_path.write_bytes(file_content)
-        return dest_path.resolve()
+    def cleanup_temp(self, path: Path) -> None:
+        """Delete the tempfile created by save() after ingestion completes."""
+        path.unlink(missing_ok=True)
 
-    def list_files(self, user_id: str, session_id: str) -> list[Path]:
-        """Return all files currently in active storage for a session."""
-        active_dir = self._active_dir(user_id, session_id)
-        if not active_dir.exists():
-            return []
-        return [p for p in active_dir.iterdir() if p.is_file()]
+    def list_files(self, user_id: str, session_id: str) -> list[str]:
+        """Return S3 keys of all active files for the session."""
+        prefix = f"{user_id}/active/{session_id}/"
+        resp = self._s3.list_objects_v2(Bucket=self._bucket, Prefix=prefix)
+        return [obj["Key"] for obj in resp.get("Contents", [])]
 
     def archive(self, user_id: str, session_id: str) -> None:
-        """Move a session's files from active to archive storage.
-
-        Called when a session is deleted.  If there are no active files for
-        the session this is a no-op.
-
-        Args:
-            user_id:    User identifier.
-            session_id: Session identifier.
-        """
-        src = self._active_dir(user_id, session_id)
-        if not src.exists():
-            return
-        dest = self._archive_dir(user_id, session_id)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dest))
+        """Copy session objects from active/ to archive/ prefix, then delete originals."""
+        prefix = f"{user_id}/active/{session_id}/"
+        resp = self._s3.list_objects_v2(Bucket=self._bucket, Prefix=prefix)
+        for obj in resp.get("Contents", []):
+            src_key = obj["Key"]
+            dest_key = src_key.replace("/active/", "/archive/", 1)
+            self._s3.copy_object(
+                Bucket=self._bucket,
+                CopySource={"Bucket": self._bucket, "Key": src_key},
+                Key=dest_key,
+            )
+            self._s3.delete_object(Bucket=self._bucket, Key=src_key)
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Helpers
     # ------------------------------------------------------------------
 
-    def _active_dir(self, user_id: str, session_id: str) -> Path:
-        return self._base / user_id / "active" / session_id
-
-    def _archive_dir(self, user_id: str, session_id: str) -> Path:
-        return self._base / user_id / "archive" / session_id
+    def _active_key(self, user_id: str, session_id: str, filename: str) -> str:
+        return f"{user_id}/active/{session_id}/{filename}"

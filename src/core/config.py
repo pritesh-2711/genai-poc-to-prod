@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yaml
 
 from .exceptions import ConfigurationError
-from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig, RerankerConfig
+from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig, RerankerConfig, StorageConfig
 
 
 class ConfigManager:
@@ -34,6 +34,7 @@ class ConfigManager:
         self.guardrails_config = self._build_guardrails_config()
         self.embedding_config = self._build_embedding_config()
         self.reranker_config = self._build_reranker_config()
+        self.storage_config = self._build_storage_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -206,6 +207,47 @@ class ConfigManager:
             model=rr.get("model", "BAAI/bge-reranker-base"),
             top_k=rr.get("top_k", 5),
             device=rr.get("device", "cpu"),
+        )
+
+    def _build_storage_config(self) -> StorageConfig:
+        """Build storage configuration from config file.
+
+        Returns:
+            StorageConfig with deployment target and provider-specific settings.
+        """
+        st = self.config.get("storage", {})
+        deployment = st.get("deployment", "local").lower()
+
+        if deployment not in {"local", "cloud"}:
+            raise ConfigurationError(
+                f"Invalid storage.deployment '{deployment}'. Must be 'local' or 'cloud'."
+            )
+
+        if deployment == "local":
+            return StorageConfig(deployment="local")
+
+        cloud = st.get("cloud", {})
+        provider = cloud.get("provider", "aws").lower()
+
+        if provider not in {"aws", "azure", "gcp"}:
+            raise ConfigurationError(
+                f"Unsupported storage.cloud.provider '{provider}'. "
+                "Supported: aws, azure, gcp."
+            )
+
+        if provider == "aws":
+            aws = cloud.get("aws", {})
+            return StorageConfig(
+                deployment="cloud",
+                cloud_provider="aws",
+                aws_s3_bucket=self._resolve_env_vars(aws.get("s3_bucket", "${AWS_S3_BUCKET}")),
+                aws_s3_region=self._resolve_env_vars(aws.get("s3_region", "${AWS_S3_REGION}")),
+                aws_redis_url=self._resolve_env_vars(aws.get("redis_url", "${REDIS_URL}")),
+            )
+
+        # azure / gcp — reserved for future implementation
+        raise ConfigurationError(
+            f"storage.cloud.provider '{provider}' is not yet implemented."
         )
 
     def get(self, key: str, default: Any = None) -> Any:

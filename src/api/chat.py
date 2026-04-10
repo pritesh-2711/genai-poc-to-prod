@@ -384,6 +384,22 @@ async def stream_message(
                 **_to_msg_response(assistant_record).model_dump(mode="json"),
             })
 
+        except InputBlockedError:
+            try:
+                blocked_record = repo.add_message(
+                    session_id=session_id,
+                    sender="assistant",
+                    message=_BLOCKED_REPLY,
+                )
+                for word in _BLOCKED_REPLY.split(" "):
+                    yield _sse({"type": "token", "content": word + " "})
+                yield _sse({
+                    "type": "done",
+                    **_to_msg_response(blocked_record).model_dump(mode="json"),
+                })
+            except Exception:
+                yield _sse({"type": "error", "detail": _BLOCKED_REPLY})
+
         except Exception as e:
             logger.exception("Unexpected error in stream_message")
             yield _sse({"type": "error", "detail": f"Unexpected error: {e}"})
