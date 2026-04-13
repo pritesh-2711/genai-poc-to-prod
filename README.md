@@ -1,6 +1,6 @@
 # Research Paper Chat Application
 
-A production-oriented RAG chat application built step by step — from a bare LLM call to a multi-user API with memory, document ingestion, hierarchical retrieval, reranking, and LangGraph-based orchestration.
+A production-oriented RAG chat application built step by step — from a bare LLM call to a multi-user API with memory, document ingestion, hierarchical retrieval, reranking, LangGraph-based workflows, and agentic orchestration.
 
 ## Quick Start
 
@@ -77,6 +77,16 @@ Each branch adds one capability on top of the previous. Follow them in order.
   - `src/api/chat.py` — SSE streaming endpoint (`GET /sessions/{id}/stream`) with per-node status events in deep mode
   - UI — fast/deep mode toggle, node status shown next to typing indicator in deep mode
 
+### Branch: `feature/agents`
+
+- Read `docs/agents.md` — explains the `single_rag_agent` and `supervisor_orchestration_agent` designs, worker responsibilities, and why the tool boundaries are high-level rather than infrastructure-level
+- Read `docs/design_intuition.md` (Part 5) — explains the reasoning behind deterministic workflows vs agentic orchestration, the supervisor/worker split, and the `category + variant` API contract
+- Application changes:
+  - `src/agents/` — `SingleRAGAgent`, `SupervisorOrchestrationAgent`, and specialist worker agents for document research, web research, and computation
+  - `src/orchestrators/` — `RAGAgentOrchestrator` and `SupervisorAgentOrchestrator`, both routed by the top-level `RAGOrchestrator`
+  - `src/tools/` — high-level tools exposed to agents (`search_documents`, `web_search`, `fetch_webpage`, `calculate`, etc.)
+  - `src/api/schemas.py` + UI — chat execution now uses `category` (`workflow` | `agent`) and `variant` (`fast`, `deep`, `single_rag_agent`, `supervisor_orchestration_agent`)
+
 ----
 
 ## What the initial version was lacking
@@ -113,16 +123,24 @@ Each branch adds one capability on top of the previous. Follow them in order.
 - [x] **LangGraph orchestration** — Two execution modes selectable per request:
   - **Fast mode** — resolve memory → retrieve → rerank → generate. No extra LLM calls. Optimised for latency.
   - **Deep mode** — intent analysis → optional HITL clarification (via `interrupt()`) → complexity routing → query rewrite or decomposition (Send API fan-out) → retrieve → rerank → generate → LLM-as-judge validation loop (max 3 iterations, best-response fallback).
+- [x] **Agentic orchestration** — Two agent variants selectable per request:
+  - **Single RAG Agent** — one agent with access to high-level document, web, and calculation tools.
+  - **Supervisor Orchestration Agent** — one supervisor delegating to specialist document, web, and computation workers via worker-facing delegation tools.
 - [x] **SSE streaming** — Token-level streaming via `GET /sessions/{id}/stream`. Deep mode also emits `status` events naming the current node (e.g., "Checking query intent…", "Ranking relevant results…").
+- [x] **Unified execution contract** — Chat requests use `category + variant` so workflows and agents share one API surface:
+  - `workflow / fast`
+  - `workflow / deep`
+  - `agent / single_rag_agent`
+  - `agent / supervisor_orchestration_agent`
 - [x] **Admin-gated signup** — New registrations land as `status='pending'`. Users cannot sign in until an admin sets their status to `'approved'` via a direct SQL update. Rejected users receive a clear message on sign-in attempt.
 
 ## Still to address
 
 - [ ] Feedback Learning
 - [ ] Post-LLM Evaluations (response quality, hallucination, relevance)
-- [ ] Tool calling
 - [ ] True token-level streaming (replace word-split with `stream_mode="messages"`)
 - [ ] Show decomposed sub-queries to user before retrieval runs
+- [ ] Agent evaluation / analytics (compare workflow vs agent quality, cost, and latency)
 
 ----
 

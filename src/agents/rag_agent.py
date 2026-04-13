@@ -8,7 +8,6 @@ The agent is intentionally narrow:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from langchain.agents import create_agent
@@ -16,6 +15,7 @@ from langchain.agents import create_agent
 from ..chat_service import ChatService
 from ..core.logging import LoggingManager
 from ..core.models import ChatRecord
+from ._shared import extract_agent_run_result
 
 logger = LoggingManager.get_logger(__name__)
 
@@ -38,14 +38,7 @@ Working style:
 - Do not expose raw chain-of-thought.
 """
 
-
-@dataclass
-class SingleRAGAgentResult:
-    """Final output captured from one agent run."""
-
-    response: str
-    tools_used: list[str]
-    step_count: int
+from ._shared import AgentRunResult as SingleRAGAgentResult
 
 
 class SingleRAGAgent:
@@ -83,31 +76,14 @@ class SingleRAGAgent:
         result = await graph.ainvoke(
             {"messages": [{"role": "user", "content": user_message}]}
         )
-
-        messages = result.get("messages", []) if isinstance(result, dict) else []
-        tools_used: list[str] = []
-        final_response = ""
-
-        for msg in messages:
-            tool_calls = getattr(msg, "tool_calls", None) or []
-            for call in tool_calls:
-                name = call.get("name")
-                if name:
-                    tools_used.append(name)
-
-        for msg in reversed(messages):
-            msg_type = getattr(msg, "type", "")
-            content = getattr(msg, "content", "")
-            if msg_type == "ai" and isinstance(content, str) and content.strip():
-                final_response = content.strip()
-                break
-
-        if not final_response:
+        extracted = extract_agent_run_result(
+            result,
+            "I couldn't produce a final response from the agent run.",
+        )
+        if extracted.response.startswith("I couldn't"):
             logger.warning("SingleRAGAgent produced no assistant content.")
-            final_response = "I couldn't produce a final response from the agent run."
-
         return SingleRAGAgentResult(
-            response=final_response,
-            tools_used=tools_used,
-            step_count=max(len(tools_used), 1),
+            response=extracted.response,
+            tools_used=extracted.tools_used,
+            step_count=extracted.step_count,
         )
