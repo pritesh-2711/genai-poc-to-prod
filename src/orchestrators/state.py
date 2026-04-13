@@ -27,7 +27,7 @@ class RAGState(TypedDict, total=False):
     original_query: str
     query_embedding: list[float]        # pre-computed by API; reused in retrieve + memory
     category: Literal["workflow", "agent"]
-    variant: Literal["fast", "deep", "single_rag_agent"]
+    variant: Literal["fast", "deep", "single_rag_agent", "supervisor_orchestration_agent"]
     session_id: str
     user_id: str
     user_chat_id: str                   # UUID of the persisted user message (for memory dedup)
