@@ -45,6 +45,7 @@ from ..reranker.base import BaseReranker
 from .deep_orchestrator import DeepOrchestrator
 from .fast_orchestrator import FastOrchestrator
 from .rag_agent_orchestrator import RAGAgentOrchestrator
+from .supervisor_agent_orchestrator import SupervisorAgentOrchestrator
 from .state import RAGState
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ class RAGOrchestrator:
         self._fast = FastOrchestrator(**shared_kwargs)
         self._deep = DeepOrchestrator(**shared_kwargs)
         self._agent = RAGAgentOrchestrator(**shared_kwargs)
+        self._supervisor = SupervisorAgentOrchestrator(**shared_kwargs)
 
         # Checkpointer is injected by main.py so the deployment backend
         # (MemorySaver for local, AsyncRedisSaver for cloud) is decided at startup.
@@ -103,11 +105,13 @@ class RAGOrchestrator:
         fast_graph = self._fast.build_graph()
         deep_graph = self._deep.build_graph()
         agent_graph = self._agent.build_graph()
+        supervisor_graph = self._supervisor.build_graph()
 
         builder = StateGraph(RAGState)
         builder.add_node("fast_graph", fast_graph)
         builder.add_node("deep_graph", deep_graph)
         builder.add_node("single_rag_agent_graph", agent_graph)
+        builder.add_node("supervisor_orchestration_agent_graph", supervisor_graph)
 
         builder.add_conditional_edges(
             START,
@@ -118,11 +122,13 @@ class RAGOrchestrator:
                 "workflow:fast": "fast_graph",
                 "workflow:deep": "deep_graph",
                 "agent:single_rag_agent": "single_rag_agent_graph",
+                "agent:supervisor_orchestration_agent": "supervisor_orchestration_agent_graph",
             },
         )
         builder.add_edge("fast_graph", END)
         builder.add_edge("deep_graph", END)
         builder.add_edge("single_rag_agent_graph", END)
+        builder.add_edge("supervisor_orchestration_agent_graph", END)
 
         return builder.compile(checkpointer=self._checkpointer)
 
