@@ -555,3 +555,233 @@ UPDATE poc2prod.users SET status = 'approved' WHERE email = 'user@example.com';
 -- Reject
 UPDATE poc2prod.users SET status = 'rejected' WHERE email = 'user@example.com';
 ```
+
+---
+
+## Part 5 — Agentic RAG Design
+
+### Why add agents when workflows already exist
+
+The deterministic workflow layer solves a large class of RAG problems very well:
+
+- `fast` is cheap, predictable, and good for straightforward document QA
+- `deep` is better for ambiguity, decomposition, and iterative correction
+
+But fixed graphs become awkward when the question needs adaptive evidence gathering:
+
+- compare uploaded documents with current external knowledge
+- combine document evidence with exact calculations
+- decide dynamically whether one search pass is enough or whether a second tool call is needed
+
+This is where agentic RAG becomes useful. The model is allowed to plan its own
+tool usage, but only within carefully chosen boundaries.
+
+### The key boundary: adaptive reasoning, deterministic infrastructure
+
+The central design decision is:
+
+> make planning agentic, keep infrastructure deterministic
+
+That means the following still remain fixed backend concerns:
+
+- short-term and long-term memory resolution
+- embedding creation
+- vector retrieval internals
+- reranking internals
+- parent-context fetching
+- persistence of chat records and metadata
+
+The agent is responsible for:
+
+- deciding whether tools are needed
+- choosing which high-level tool to call
+- deciding when it has enough evidence
+- synthesizing the final answer
+
+This separation prevents the system from degenerating into "LLM controls every backend primitive", which is powerful in theory but fragile and hard to debug in practice.
+
+### Why low-level retrieval primitives are not agent tools
+
+It is tempting to expose backend primitives such as:
+
+- `embed_query`
+- `search_pgvector`
+- `rerank_chunks`
+- `fetch_parent_contexts`
+
+This project does **not** do that.
+
+Those primitives are implementation details. They are meaningful to engineers,
+but not the right abstraction level for the model.
+
+Instead, the agent sees user-meaningful tools:
+
+- `search_documents`
+- `get_uploaded_documents`
+- `summarize_document`
+- `extract_paper_metadata`
+- `web_search`
+- `fetch_webpage`
+- `calculate`
+
+Each of these tools encapsulates its own lower-level pipeline. This produces:
+
+- fewer tool calls
+- better reliability
+- lower latency
+- cleaner observability
+- easier future refactors of retrieval internals
+
+### Single-agent design
+
+The first agent mode is `single_rag_agent`.
+
+Graph:
+
+```text
+resolve_memory → run_agent → END
+```
+
+The agent gets all high-level tools in one toolbox:
+
+- document tools
+- web tools
+- calculation tool
+
+This mode exists because it gives the user agentic flexibility with minimal
+coordination overhead. It is the natural first step before true multi-agent
+delegation.
+
+### Why a supervisor model was added later
+
+Once a single agent is working, the next useful improvement is not "more tools".
+It is better separation of responsibility.
+
+Some tasks are naturally multi-specialist:
+
+- "Compare what this uploaded paper claims with recent public information"
+- "Pull the metrics from the paper and compute the relative improvement"
+- "Summarize the uploaded report and check whether recent external sources agree"
+
+These are good fits for a supervisor-plus-workers design.
+
+### The worker split: role-based, not subsystem-based
+
+The worker agents in this project are:
+
+- **Document Research Worker**
+- **Web Research Worker**
+- **Computation Worker**
+
+This is intentionally a role-based split.
+
+Rejected alternatives included workers such as:
+
+- retriever worker
+- reranker worker
+- embedding worker
+- memory worker
+
+Those roles mirror backend subsystems, not meaningful research behaviors. They
+would create more coordination overhead without creating better specialist
+reasoning.
+
+### Worker responsibilities
+
+#### Document Research Worker
+
+Allowed tools:
+
+- `get_uploaded_documents`
+- `search_documents`
+- `summarize_document`
+- `extract_paper_metadata`
+
+Its job is to stay grounded in uploaded session documents and avoid web assumptions.
+
+#### Web Research Worker
+
+Allowed tools:
+
+- `web_search`
+- `fetch_webpage`
+
+Its job is to gather current or external information and return concise findings.
+
+#### Computation Worker
+
+Allowed tools:
+
+- `calculate`
+
+Its job is to solve only the numerical part of the problem with exact outputs.
+
+### Delegation as worker-facing tools
+
+The supervisor does not directly own all worker tools. Instead, it receives
+three delegation tools:
+
+- `ask_document_worker(task)`
+- `ask_web_worker(task)`
+- `ask_computation_worker(task)`
+
+Each delegation tool runs a specialized worker agent behind the scenes.
+
+This design is important for three reasons:
+
+1. specialization is enforced by construction
+2. worker behavior is easier to inspect and log
+3. the supervisor remains a planner/synthesizer rather than becoming another
+   single-agent "everything tool" wrapper
+
+### Supervisor design
+
+The supervisor's role is:
+
+1. understand the user request
+2. decide whether the task needs document evidence, web evidence, math, or a combination
+3. delegate only when necessary
+4. synthesize worker outputs into the final answer
+
+The supervisor is **not** intended to perform low-level retrieval itself.
+
+### Validation strategy for agents
+
+The agentic paths currently skip the deep-mode validation loop.
+
+This is a deliberate tradeoff:
+
+- agentic reasoning already adds latency
+- adding LLM-as-judge on top makes iteration slower and harder to inspect
+- first-pass agent development is easier when there is only one active reasoning layer
+
+This does **not** mean validation is useless for agents forever. It means the
+first implementation optimizes for observability and controllable complexity.
+
+### Unified API and UI model
+
+The earlier API exposed a single `mode` field. That was sufficient for
+`fast` vs `deep`, but it became too ambiguous once agents were introduced.
+
+The API now uses:
+
+```json
+{
+  "category": "workflow" | "agent",
+  "variant":  "fast" | "deep" | "single_rag_agent" | "supervisor_orchestration_agent"
+}
+```
+
+This matches the frontend model:
+
+- **Workflows**
+  - Fast
+  - Deep
+- **Agents**
+  - Single RAG Agent
+  - Supervisor Agent
+
+This naming keeps the conceptual difference explicit:
+
+- workflows = fixed graph logic
+- agents = adaptive tool-using reasoning
