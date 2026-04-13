@@ -44,6 +44,7 @@ from ..memory.repository import MemoryRepository
 from ..reranker.base import BaseReranker
 from .deep_orchestrator import DeepOrchestrator
 from .fast_orchestrator import FastOrchestrator
+from .rag_agent_orchestrator import RAGAgentOrchestrator
 from .state import RAGState
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ class RAGOrchestrator:
 
         self._fast = FastOrchestrator(**shared_kwargs)
         self._deep = DeepOrchestrator(**shared_kwargs)
+        self._agent = RAGAgentOrchestrator(**shared_kwargs)
 
         # Checkpointer is injected by main.py so the deployment backend
         # (MemorySaver for local, AsyncRedisSaver for cloud) is decided at startup.
@@ -97,21 +99,30 @@ class RAGOrchestrator:
         logger.info("RAGOrchestrator initialised (fast + deep subgraphs compiled).")
 
     def _build_router_graph(self) -> CompiledStateGraph:
-        """Wire fast and deep subgraphs behind a mode-based conditional edge."""
+        """Wire workflow and agent subgraphs behind category/variant routing."""
         fast_graph = self._fast.build_graph()
         deep_graph = self._deep.build_graph()
+        agent_graph = self._agent.build_graph()
 
         builder = StateGraph(RAGState)
         builder.add_node("fast_graph", fast_graph)
         builder.add_node("deep_graph", deep_graph)
+        builder.add_node("single_rag_agent_graph", agent_graph)
 
         builder.add_conditional_edges(
             START,
-            lambda state: state.get("mode", "fast"),
-            {"fast": "fast_graph", "deep": "deep_graph"},
+            lambda state: (
+                f"{state.get('category', 'workflow')}:{state.get('variant', 'fast')}"
+            ),
+            {
+                "workflow:fast": "fast_graph",
+                "workflow:deep": "deep_graph",
+                "agent:single_rag_agent": "single_rag_agent_graph",
+            },
         )
         builder.add_edge("fast_graph", END)
         builder.add_edge("deep_graph", END)
+        builder.add_edge("single_rag_agent_graph", END)
 
         return builder.compile(checkpointer=self._checkpointer)
 
