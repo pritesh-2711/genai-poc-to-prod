@@ -238,6 +238,7 @@ _WORKFLOW_DEEP_NODE_STATUS: dict[str, str | None] = {
 _AGENT_NODE_STATUS: dict[str, str | None] = {
     "resolve_memory": "Loading conversation history…",
     "run_agent": "Planning and using tools…",
+    "run_supervisor": "Supervising specialist workers…",
 }
 
 
@@ -330,7 +331,10 @@ async def stream_message(
 
                     if route_key == "workflow:deep":
                         status_msg = _WORKFLOW_DEEP_NODE_STATUS.get(node_name)
-                    elif route_key == "agent:single_rag_agent":
+                    elif route_key in {
+                        "agent:single_rag_agent",
+                        "agent:supervisor_orchestration_agent",
+                    }:
                         status_msg = _AGENT_NODE_STATUS.get(node_name)
                     else:
                         status_msg = None
