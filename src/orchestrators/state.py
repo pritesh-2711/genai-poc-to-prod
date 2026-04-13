@@ -26,7 +26,8 @@ class RAGState(TypedDict, total=False):
     # ── Input (set by API before graph invocation) ──────────────────────────
     original_query: str
     query_embedding: list[float]        # pre-computed by API; reused in retrieve + memory
-    mode: Literal["fast", "deep"]
+    category: Literal["workflow", "agent"]
+    variant: Literal["fast", "deep", "single_rag_agent"]
     session_id: str
     user_id: str
     user_chat_id: str                   # UUID of the persisted user message (for memory dedup)
@@ -69,6 +70,8 @@ class RAGState(TypedDict, total=False):
 
     # ── Output ───────────────────────────────────────────────────────────────
     final_response: str
+    tools_used: list[str]
+    agent_step_count: int
 
 
 class SubQueryState(TypedDict):
