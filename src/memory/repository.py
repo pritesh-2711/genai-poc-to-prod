@@ -466,3 +466,118 @@ class MemoryRepository:
             )
             for row in rows
         ]
+
+    def get_session_documents(
+        self,
+        session_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[dict]:
+        """Return unique ingested documents for a user's session."""
+        conn = self._connect()
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                cur.execute(
+                    """
+                    SELECT
+                        i.filename,
+                        COALESCE(MAX(i.file_description), '') AS file_description,
+                        COALESCE(MAX(i.type), 'pdf') AS file_type,
+                        COUNT(DISTINCT i.parent_id) AS parent_chunks,
+                        COUNT(i.id) AS child_chunks,
+                        MIN(i.created_at) AS ingested_at
+                    FROM poc2prod.ingestions i
+                    JOIN poc2prod.sessions s
+                      ON s.session_id = i.session_id
+                    WHERE i.session_id = %s
+                      AND s.user_id = %s
+                    GROUP BY i.filename
+                    ORDER BY MIN(i.created_at) DESC;
+                    """,
+                    (str(session_id), str(user_id)),
+                )
+                rows = cur.fetchall()
+            except Exception as e:
+                logger.error(f"DB error fetching session documents: {e}")
+                raise MemoryRepositoryError(f"Database error: {e}")
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+
+        return [
+            {
+                "filename": row["filename"],
+                "file_description": row["file_description"],
+                "file_type": row["file_type"],
+                "parent_chunks": row["parent_chunks"],
+                "child_chunks": row["child_chunks"],
+                "ingested_at": row["ingested_at"].isoformat() if row["ingested_at"] else None,
+            }
+            for row in rows
+        ]
+
+    def get_chunks_by_filename(
+        self,
+        session_id: uuid.UUID,
+        user_id: uuid.UUID,
+        filename: str,
+        content_types: Optional[list[str]] = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Return ingested chunks for a specific file in a user's session."""
+        conn = self._connect()
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                if content_types:
+                    cur.execute(
+                        """
+                        SELECT i.id, i.filename, i.chunk_content, i.metadata, i.content_type, i.created_at
+                        FROM poc2prod.ingestions i
+                        JOIN poc2prod.sessions s
+                          ON s.session_id = i.session_id
+                        WHERE i.session_id = %s
+                          AND s.user_id = %s
+                          AND i.filename = %s
+                          AND i.content_type = ANY(%s)
+                        ORDER BY i.created_at ASC
+                        LIMIT %s;
+                        """,
+                        (str(session_id), str(user_id), filename, content_types, limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT i.id, i.filename, i.chunk_content, i.metadata, i.content_type, i.created_at
+                        FROM poc2prod.ingestions i
+                        JOIN poc2prod.sessions s
+                          ON s.session_id = i.session_id
+                        WHERE i.session_id = %s
+                          AND s.user_id = %s
+                          AND i.filename = %s
+                        ORDER BY i.created_at ASC
+                        LIMIT %s;
+                        """,
+                        (str(session_id), str(user_id), filename, limit),
+                    )
+                rows = cur.fetchall()
+            except Exception as e:
+                logger.error(f"DB error fetching chunks by filename: {e}")
+                raise MemoryRepositoryError(f"Database error: {e}")
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+
+        return [
+            {
+                "id": str(row["id"]),
+                "filename": row["filename"],
+                "chunk_content": row["chunk_content"],
+                "metadata": row["metadata"],
+                "content_type": row["content_type"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]

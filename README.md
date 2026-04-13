@@ -22,7 +22,7 @@ Each branch adds one capability on top of the previous. Follow them in order.
 ### Branch: `feature/beginners-app`
 
 - Minimalistic project structure: logging, configs, Pydantic models, custom exceptions
-- Chat capability with swappable LLM providers (Ollama / OpenAI)
+- Chat capability with swappable LLM providers (Ollama / OpenAI)V
 - Simple UI via Chainlit and a CLI chat system
 
 ### Branch: `feature/memory`

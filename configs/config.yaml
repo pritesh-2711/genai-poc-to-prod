@@ -4,7 +4,7 @@ app:
   debug: false
 
 embeddings:
-  provider: "ollama" # Options: "local", "ollama", "openai"
+  provider: "openai" # Options: "local", "ollama", "openai"
   local:
     model: "sentence-transformers/all-MiniLM-L6-v2"
     dimension: 384
@@ -60,9 +60,20 @@ reranker:
   top_k: 5                          # chunks to keep after reranking
   device: "cpu"                     # "cpu" or "cuda"
 
+storage:
+  # "local"  — files saved to disk under storage/; state kept in-process
+  # "cloud"  — files in object storage; state in Redis
+  deployment: local
+  cloud:
+    provider: aws           # aws | azure | gcp  (only aws is implemented)
+    aws:
+      s3_bucket: "${AWS_S3_BUCKET}"
+      s3_region: "${AWS_S3_REGION}"
+      redis_url: "${REDIS_URL}"   # e.g. redis://my-elasticache.abc.cache.amazonaws.com:6379
+
 guardrails:
   # Set to false to disable all guardrail checks
-  enabled: false
+  enabled: true
   # Model used by DeepEval to judge metrics. Use a fast cheap model to minimise
   # latency overhead. All metrics run concurrently so cost = 3 parallel calls.
   evaluator_model: "gpt-4o-mini"

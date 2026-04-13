@@ -30,6 +30,7 @@ Thread-ID strategy:
 import logging
 from typing import AsyncIterator, Optional
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -73,6 +74,7 @@ class RAGOrchestrator:
         memory_repo: MemoryRepository,
         reranker_config: RerankerConfig,
         chat_config: ChatConfig,
+        checkpointer: Optional[BaseCheckpointSaver] = None,
     ) -> None:
         shared_kwargs = dict(
             embedder=embedder,
@@ -87,9 +89,9 @@ class RAGOrchestrator:
         self._fast = FastOrchestrator(**shared_kwargs)
         self._deep = DeepOrchestrator(**shared_kwargs)
 
-        # MemorySaver persists interrupt() state across requests within the same
-        # process.  For multi-worker production use, swap for PostgresSaver.
-        self._checkpointer = MemorySaver()
+        # Checkpointer is injected by main.py so the deployment backend
+        # (MemorySaver for local, AsyncRedisSaver for cloud) is decided at startup.
+        self._checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         self._graph = self._build_router_graph()
 
         logger.info("RAGOrchestrator initialised (fast + deep subgraphs compiled).")
