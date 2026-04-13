@@ -42,3 +42,6 @@ rapidocr>=3.7.0
 onnxruntime>=1.19.0
 # torch and torchvision are installed before this file in the Dockerfile
 # using the CPU wheel index to keep the image ~1.2 GB smaller.
+tavily-python>=0.7.23
+httpx>=0.23.0
+beautifulsoup4>=4.12.0
