@@ -70,7 +70,8 @@ class SessionResponse(BaseModel):
 
 class SendMessageRequest(BaseModel):
     message: str
-    mode: Literal["fast", "deep"] = "fast"
+    category: Literal["workflow", "agent"] = "workflow"
+    variant: Literal["fast", "deep", "single_rag_agent"] = "fast"
 
 
 class ChatMessageResponse(BaseModel):

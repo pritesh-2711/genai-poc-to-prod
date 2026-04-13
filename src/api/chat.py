@@ -6,9 +6,9 @@ POST /sessions/{session_id}/messages/stream — same, streamed via SSE
 
 POST flow (non-streaming):
   1. Embed query once  →  persist user message with embedding
-  2. Check if session has a pending clarification thread (deep mode HITL)
+  2. Check if session has a pending clarification thread (workflow deep-mode HITL)
      a. If yes  → resume interrupted graph with user message as clarification
-     b. If no   → start fresh graph run (fast or deep based on body.mode)
+     b. If no   → start fresh graph run based on body.category/body.variant
   3. Graph runs the full RAG cycle (memory, retrieval, rerank, generate, [validate])
   4. If graph is interrupted (query_clarification) →
        return clarification question as assistant reply + store pending thread
@@ -91,7 +91,7 @@ async def send_message(
 ):
     """Persist the user message, run the RAG orchestrator, persist reply.
 
-    Handles both normal turns and deep-mode clarification resumes transparently.
+Handles workflow and agent turns, plus deep-workflow clarification resumes.
     """
     session_id_str = str(session_id)
     user_id_str = str(current_user.user_id)
@@ -128,7 +128,8 @@ async def send_message(
             initial_state: RAGState = {
                 "original_query": body.message,
                 "query_embedding": query_vec,
-                "mode": body.mode,
+                "category": body.category,
+                "variant": body.variant,
                 "session_id": session_id_str,
                 "user_id": user_id_str,
                 "user_chat_id": user_chat_id_str,
@@ -179,10 +180,13 @@ async def send_message(
             message=assistant_text,
             embedding=assistant_vec,
             metadata={
-                "mode": body.mode,
+                "category": body.category,
+                "variant": body.variant,
                 "query_complexity": result.get("query_complexity", ""),
                 "iterations": result.get("iteration_count", 0),
                 "validation_result": result.get("validation_result", ""),
+                "tools_used": result.get("tools_used", []),
+                "agent_step_count": result.get("agent_step_count", 0),
             },
         )
 
@@ -215,7 +219,7 @@ def _sse(data: dict) -> str:
 # ── Deep-mode node → human-readable status message ───────────────────────────
 # Only non-None values are emitted. Identical consecutive statuses are
 # deduplicated (e.g., retrieve_sub_query fires N times for decomposed queries).
-_DEEP_NODE_STATUS: dict[str, str | None] = {
+_WORKFLOW_DEEP_NODE_STATUS: dict[str, str | None] = {
     "resolve_memory":          "Loading conversation history…",
     "analyze_query":           "Checking query intent…",
     "route_complexity":        "Identifying complexity…",
@@ -229,6 +233,11 @@ _DEEP_NODE_STATUS: dict[str, str | None] = {
     "validate_response":       "Validating answer quality…",
     "correction":              "Refining the answer…",
     "finalize":                None,
+}
+
+_AGENT_NODE_STATUS: dict[str, str | None] = {
+    "resolve_memory": "Loading conversation history…",
+    "run_agent": "Planning and using tools…",
 }
 
 
@@ -295,7 +304,8 @@ async def stream_message(
                 initial_state: RAGState = {
                     "original_query": body.message,
                     "query_embedding": query_vec,
-                    "mode": body.mode,
+                    "category": body.category,
+                    "variant": body.variant,
                     "session_id": session_id_str,
                     "user_id": user_id_str,
                     "user_chat_id": user_chat_id_str,
@@ -307,7 +317,7 @@ async def stream_message(
                 }
 
                 last_status: str | None = None
-                is_deep = body.mode == "deep"
+                route_key = f"{body.category}:{body.variant}"
 
                 async for chunk in orchestrator.astream_updates(initial_state, thread_id=thread_id):
                     # chunk = (namespace_tuple, {node_name: state_delta})
@@ -318,11 +328,16 @@ async def stream_message(
 
                     node_name = next(iter(update))  # the completing node
 
-                    if is_deep:
-                        status_msg = _DEEP_NODE_STATUS.get(node_name)
-                        if status_msg and status_msg != last_status:
-                            yield _sse({"type": "status", "content": status_msg})
-                            last_status = status_msg
+                    if route_key == "workflow:deep":
+                        status_msg = _WORKFLOW_DEEP_NODE_STATUS.get(node_name)
+                    elif route_key == "agent:single_rag_agent":
+                        status_msg = _AGENT_NODE_STATUS.get(node_name)
+                    else:
+                        status_msg = None
+
+                    if status_msg and status_msg != last_status:
+                        yield _sse({"type": "status", "content": status_msg})
+                        last_status = status_msg
 
                 # ── 4. Retrieve final state after stream ──────────────────────
                 graph_state = orchestrator.get_graph_state(thread_id)
@@ -369,10 +384,13 @@ async def stream_message(
                     message=assistant_text,
                     embedding=assistant_vec,
                     metadata={
-                        "mode": body.mode,
+                        "category": body.category,
+                        "variant": body.variant,
                         "query_complexity": (result or {}).get("query_complexity", ""),
                         "iterations": (result or {}).get("iteration_count", 0),
                         "validation_result": (result or {}).get("validation_result", ""),
+                        "tools_used": (result or {}).get("tools_used", []),
+                        "agent_step_count": (result or {}).get("agent_step_count", 0),
                     },
                 )
             except MemoryRepositoryError as e:
