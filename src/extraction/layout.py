@@ -24,8 +24,12 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
+import logging
+
 from ..core.exceptions import ExtractionError
 from .base import BaseExtractor, ExtractedRecord, ExtractionContext, LayoutResult
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # URL helper (shared with downstream extractors via import)
@@ -57,7 +61,7 @@ class LayoutExtractor(BaseExtractor):
     process them without re-running Docling.
     """
 
-    def __init__(self, do_picture_classification: bool = True) -> None:
+    def __init__(self, do_picture_classification: bool = False) -> None:
         self._do_picture_classification = do_picture_classification
 
     # ------------------------------------------------------------------
@@ -104,6 +108,7 @@ class LayoutExtractor(BaseExtractor):
             result = converter.convert(pdf_path)
             doc_dict = result.document.export_to_dict()
         except Exception as exc:
+            _log.exception("Docling pipeline failed for '%s'", pdf_path)
             raise ExtractionError(
                 f"Docling conversion failed for '{pdf_path}': {exc}"
             ) from exc
