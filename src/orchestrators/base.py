@@ -21,6 +21,7 @@ from ..core.models import ChatConfig, RerankerConfig
 from ..databases.retrieval import PgVectorRetrievalRepository
 from ..embedding.base import BaseEmbedder
 from ..memory.repository import MemoryRepository
+from ..mcp_client import MCPToolLoader
 from ..reranker.base import BaseReranker
 from .state import RAGState, SubQueryState
 
@@ -56,6 +57,7 @@ class BaseOrchestrator(ABC):
         memory_repo: MemoryRepository,
         reranker_config: RerankerConfig,
         chat_config: ChatConfig,
+        mcp_tool_loader: MCPToolLoader | None = None,
     ) -> None:
         self._embedder = embedder
         self._retrieval_repo = retrieval_repo
@@ -64,6 +66,7 @@ class BaseOrchestrator(ABC):
         self._memory_repo = memory_repo
         self._reranker_config = reranker_config
         self._chat_config = chat_config
+        self._mcp_tool_loader = mcp_tool_loader
 
     @abstractmethod
     def build_graph(self) -> CompiledStateGraph:

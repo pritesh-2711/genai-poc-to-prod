@@ -82,3 +82,26 @@ guardrails:
     bias: true
     prompt_injection: true
     jailbreaking: true
+
+mcp:
+  # Set to false to run without the MCP tools server (no web/calculate/analyse/rav_idp tools).
+  enabled: true
+  # "stdio"            — launch mcp-tools-library as a local subprocess (development default)
+  # "streamable-http"  — connect to an already-running remote MCP server (production)
+  transport: "stdio"
+
+  # ── stdio configuration (used when transport = "stdio") ──────────────────
+  stdio:
+    command: "python"
+    args: ["../mcp-tools-library/mcp_server.py"]
+    # Environment variables forwarded to the MCP subprocess.
+    # The subprocess inherits the full parent env; list only overrides here.
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+      E2B_API_KEY: "${E2B_API_KEY}"
+      RAV_IDP_MODE: "full"
+      RAV_IDP_OUTPUT_DIR: ".mcp-data/rav-idp"
+
+  # ── HTTP configuration (used when transport = "streamable-http") ──────────
+  http:
+    url: "${MCP_SERVER_URL}"

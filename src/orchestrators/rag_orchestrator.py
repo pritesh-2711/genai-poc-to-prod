@@ -41,6 +41,7 @@ from ..core.models import ChatConfig, RerankerConfig
 from ..databases.retrieval import PgVectorRetrievalRepository
 from ..embedding.base import BaseEmbedder
 from ..memory.repository import MemoryRepository
+from ..mcp_client import MCPToolLoader
 from ..reranker.base import BaseReranker
 from .deep_orchestrator import DeepOrchestrator
 from .fast_orchestrator import FastOrchestrator
@@ -77,6 +78,7 @@ class RAGOrchestrator:
         reranker_config: RerankerConfig,
         chat_config: ChatConfig,
         checkpointer: Optional[BaseCheckpointSaver] = None,
+        mcp_tool_loader: Optional[MCPToolLoader] = None,
     ) -> None:
         shared_kwargs = dict(
             embedder=embedder,
@@ -86,6 +88,7 @@ class RAGOrchestrator:
             memory_repo=memory_repo,
             reranker_config=reranker_config,
             chat_config=chat_config,
+            mcp_tool_loader=mcp_tool_loader,
         )
 
         self._fast = FastOrchestrator(**shared_kwargs)
