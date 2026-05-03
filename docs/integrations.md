@@ -1,4 +1,4 @@
-# Integration Document: Frontend ↔ Backend
+# Integration Document: Frontend ↔ Backend ↔ MCP Tools
 
 ## Overview
 
@@ -6,30 +6,67 @@ The frontend is a React + TypeScript SPA built with Vite. The backend is a FastA
 application served by Uvicorn. They communicate over HTTP/JSON using JWT Bearer tokens,
 with a secondary SSE channel for streaming responses.
 
-The system is a session-scoped RAG assistant with two execution modes:
+The system is a session-scoped RAG assistant with two execution modes and two agent modes:
 - **Fast mode** — direct retrieval + reranking + generation (low latency)
 - **Deep mode** — intent analysis, optional clarification, query decomposition, retrieval, reranking, generation, and LLM-as-judge validation
+- **Single RAG Agent** — one agent with access to all document and MCP tools
+- **Supervisor Agent** — supervisor + five specialist workers
+
+The backend connects to a separate **MCP tools server**
+([mcp-tools-library](https://github.com/pritesh-2711/mcp-tools-library))
+at startup. The MCP server provides stateless tools (`web_search`, `fetch_webpage`,
+`calculate`, `analyse`, `rav_idp_*`) that agents use at request time.
 
 ---
 
 ## Running the stack
 
+### MCP tools server (required for agent modes)
+
+The MCP server is launched automatically as a subprocess when the backend starts
+(stdio transport, the default). Its Python dependencies must be installed into the
+**same virtual environment** as the backend, or the subprocess will fail to import.
+
+```bash
+# From the repo root — install MCP server deps into the backend venv
+cd mcp
+source .venv/bin/activate
+pip install -e ../mcp-tools-library/
+pip install -e "../mcp-tools-library/[rav-idp]"   # optional — full entity extraction
+```
+
+To run the MCP server as a standalone process instead (HTTP transport):
+
+```bash
+cd mcp-tools-library
+python mcp_server.py
+```
+
+Then switch `configs/config.yaml` to `transport: "streamable-http"` and set
+`MCP_SERVER_URL` in your `.env`.
+
 ### Backend
 
 ```bash
-cd main
+cd mcp
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # fill in DB credentials, JWT_SECRET_KEY, OPENAI_API_KEY
+cp .env.example .env        # fill in DB credentials, JWT_SECRET_KEY, OPENAI_API_KEY,
+                             # TAVILY_API_KEY, E2B_API_KEY
 python api_server.py         # starts on http://localhost:8000
 ```
 
-Ollama must be running with the embedding model pulled:
+On startup you will see:
 
-```bash
-ollama serve
-ollama pull nomic-embed-text-v2-moe
 ```
+MCP tools loaded (6 tools): ['calculate', 'web_search', 'fetch_webpage',
+                              'analyse', 'rav_idp_process_and_ingest',
+                              'rav_idp_get_document_fidelity']
+Application startup complete. LLM=openai/gpt-4.1-mini, ..., MCP=stdio
+```
+
+If MCP fails to connect the app still starts — agent modes run with only local
+document tools.
 
 ### Frontend
 
