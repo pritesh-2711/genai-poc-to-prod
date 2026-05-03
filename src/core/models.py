@@ -1,6 +1,6 @@
 """Data models for the application."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 import uuid
@@ -71,6 +71,20 @@ class StorageConfig:
     aws_s3_bucket: Optional[str] = None
     aws_s3_region: Optional[str] = None
     aws_redis_url: Optional[str] = None
+
+
+@dataclass
+class MCPConfig:
+    """Configuration for the MCP tools library server connection."""
+
+    enabled: bool = True
+    transport: str = "stdio"  # "stdio" | "streamable-http"
+    # stdio: launch the MCP server as a local subprocess
+    stdio_command: str = "python"
+    stdio_args: list = field(default_factory=list)
+    stdio_env: dict = field(default_factory=dict)
+    # streamable-http: connect to a running remote MCP server
+    http_url: str = ""
 
 
 @dataclass

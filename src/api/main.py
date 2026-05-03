@@ -13,6 +13,7 @@ from ..chat_service import ChatService
 from ..core.config import ConfigManager
 from ..embedding import LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
 from ..guardrails import InputGuard
+from ..mcp_client import MCPToolLoader
 from ..memory.repository import MemoryRepository
 from ..databases.retrieval import PgVectorRetrievalRepository
 from ..orchestrators import RAGOrchestrator
@@ -100,6 +101,10 @@ async def lifespan(app: FastAPI):
         pending_clarifications: dict[str, str] = {}
         logger.info("Local storage: disk + in-process state backends.")
 
+    # ── MCP tools library connection ──────────────────────────────────────────
+    mcp_tool_loader = MCPToolLoader(config.mcp_config)
+    await mcp_tool_loader.connect()
+
     # ── RAGOrchestrator ───────────────────────────────────────────────────────
     orchestrator = RAGOrchestrator(
         embedder=embedder,
@@ -110,6 +115,7 @@ async def lifespan(app: FastAPI):
         reranker_config=rr_cfg,
         chat_config=config.chat_config,
         checkpointer=checkpointer,  # None → falls back to MemorySaver inside orchestrator
+        mcp_tool_loader=mcp_tool_loader,
     )
 
     app.state.config = config
@@ -118,15 +124,18 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = orchestrator
     app.state.file_loader = file_loader
     app.state.pending_clarifications = pending_clarifications
+    app.state.mcp_tool_loader = mcp_tool_loader
 
     logger.info(
         f"Application startup complete. "
         f"LLM={config.llm_config.provider}/{config.llm_config.model}, "
         f"Embedder={emb_cfg.provider}/{emb_cfg.model}, "
         f"Reranker={rr_cfg.model}, "
-        f"Storage={st_cfg.deployment}"
+        f"Storage={st_cfg.deployment}, "
+        f"MCP={config.mcp_config.transport if config.mcp_config.enabled else 'disabled'}"
     )
     yield
+    await mcp_tool_loader.disconnect()
     logger.info("Application shutdown.")
 
 
