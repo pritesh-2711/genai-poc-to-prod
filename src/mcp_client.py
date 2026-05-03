@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 import os
-from contextlib import AsyncExitStack
 from typing import Any
 
 from .core.models import MCPConfig
@@ -30,20 +29,20 @@ logger = logging.getLogger(__name__)
 
 
 class MCPToolLoader:
-    """Wraps a long-lived MCP client session, caches loaded tools in memory."""
+    """Loads MCP tools from the tools library server and caches them in memory."""
 
     def __init__(self, config: MCPConfig) -> None:
         self._config = config
         self._tools: list[Any] = []
-        self._exit_stack = AsyncExitStack()
         self._connected = False
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """Open the MCP server connection and load all tools into memory.
+        """Load all tools from the MCP server into memory.
 
-        Safe to call multiple times — reconnects only when not already connected.
+        Uses the langchain-mcp-adapters 0.1.0+ API: tools are fetched via
+        `await client.get_tools()` — no context manager required.
         """
         if not self._config.enabled:
             logger.info("MCP tools disabled (mcp.enabled=false). Skipping connection.")
@@ -62,8 +61,7 @@ class MCPToolLoader:
         client = MultiServerMCPClient(server_cfg)
 
         try:
-            await self._exit_stack.enter_async_context(client)
-            self._tools = client.get_tools()
+            self._tools = await client.get_tools()
             self._connected = True
             tool_names = [t.name for t in self._tools]
             logger.info(
@@ -76,8 +74,7 @@ class MCPToolLoader:
             self._connected = False
 
     async def disconnect(self) -> None:
-        """Close the MCP server connection."""
-        await self._exit_stack.aclose()
+        """No-op — tool lifecycle is managed internally by the MCP client."""
         self._connected = False
         logger.info("MCP tools server connection closed.")
 
