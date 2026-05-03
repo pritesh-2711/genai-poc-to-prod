@@ -1,7 +1,7 @@
 """Supervisor-agent RAG orchestrator.
 
 Keeps memory deterministic, then delegates to a supervisor agent that can call
-specialized document, web, and computation workers.
+specialized document, web, computation, data analysis, and document extraction workers.
 """
 
 from __future__ import annotations
@@ -14,10 +14,12 @@ from langgraph.graph.state import CompiledStateGraph
 from ..agents import SupervisorOrchestrationAgent
 from ..agents.workers import (
     ComputationWorkerAgent,
+    DataAnalysisWorkerAgent,
+    DocumentExtractionWorkerAgent,
     DocumentResearchWorkerAgent,
     WebResearchWorkerAgent,
 )
-from ..tools import build_document_tools, calculate, fetch_webpage, web_search
+from ..tools import build_document_tools
 from .base import BaseOrchestrator
 from .state import RAGState
 
@@ -38,26 +40,30 @@ class SupervisorAgentOrchestrator(BaseOrchestrator):
             session_id=state["session_id"],
             user_id=state["user_id"],
         )
-        web_tools = [web_search, fetch_webpage]
-        computation_tools = [calculate]
 
-        document_worker = DocumentResearchWorkerAgent(
+        # Load stateless tools from the MCP server.
+        # Falls back to empty list if MCP is unavailable — workers handle gracefully.
+        mcp = self._mcp_tool_loader
+        web_tools = mcp.get_tools(["web_search", "fetch_webpage"]) if mcp else []
+        computation_tools = mcp.get_tools(["calculate"]) if mcp else []
+        analysis_tools = mcp.get_tools(["analyse"]) if mcp else []
+        extraction_tools = mcp.get_tools([
+            "rav_idp_process_and_ingest",
+            "rav_idp_get_document_fidelity",
+        ]) if mcp else []
+
+        worker_kwargs = dict(
             chat_service=self._chat_service,
-            tools=document_tools,
             short_term_history=short_term_history,
             long_term_history=long_term_history,
         )
-        web_worker = WebResearchWorkerAgent(
-            chat_service=self._chat_service,
-            tools=web_tools,
-            short_term_history=short_term_history,
-            long_term_history=long_term_history,
-        )
-        computation_worker = ComputationWorkerAgent(
-            chat_service=self._chat_service,
-            tools=computation_tools,
-            short_term_history=short_term_history,
-            long_term_history=long_term_history,
+
+        document_worker = DocumentResearchWorkerAgent(tools=document_tools, **worker_kwargs)
+        web_worker = WebResearchWorkerAgent(tools=web_tools, **worker_kwargs)
+        computation_worker = ComputationWorkerAgent(tools=computation_tools, **worker_kwargs)
+        data_analysis_worker = DataAnalysisWorkerAgent(tools=analysis_tools, **worker_kwargs)
+        document_extraction_worker = DocumentExtractionWorkerAgent(
+            tools=extraction_tools, **worker_kwargs
         )
 
         supervisor = SupervisorOrchestrationAgent(
@@ -65,6 +71,8 @@ class SupervisorAgentOrchestrator(BaseOrchestrator):
             document_worker=document_worker,
             web_worker=web_worker,
             computation_worker=computation_worker,
+            data_analysis_worker=data_analysis_worker,
+            document_extraction_worker=document_extraction_worker,
             short_term_history=short_term_history,
             long_term_history=long_term_history,
         )

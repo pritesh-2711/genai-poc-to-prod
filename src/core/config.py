@@ -7,7 +7,7 @@ from typing import Any, Dict
 import yaml
 
 from .exceptions import ConfigurationError
-from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig, RerankerConfig, StorageConfig
+from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig, MCPConfig, RerankerConfig, StorageConfig
 
 
 class ConfigManager:
@@ -35,6 +35,7 @@ class ConfigManager:
         self.embedding_config = self._build_embedding_config()
         self.reranker_config = self._build_reranker_config()
         self.storage_config = self._build_storage_config()
+        self.mcp_config = self._build_mcp_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -248,6 +249,30 @@ class ConfigManager:
         # azure / gcp — reserved for future implementation
         raise ConfigurationError(
             f"storage.cloud.provider '{provider}' is not yet implemented."
+        )
+
+    def _build_mcp_config(self) -> MCPConfig:
+        """Build MCP tools server configuration from config file."""
+        mcp = self.config.get("mcp", {})
+        transport = mcp.get("transport", "stdio")
+
+        if transport == "stdio":
+            stdio = mcp.get("stdio", {})
+            raw_env = stdio.get("env", {})
+            resolved_env = {k: self._resolve_env_vars(v) for k, v in raw_env.items()}
+            return MCPConfig(
+                enabled=mcp.get("enabled", True),
+                transport="stdio",
+                stdio_command=stdio.get("command", "python"),
+                stdio_args=stdio.get("args", []),
+                stdio_env=resolved_env,
+            )
+
+        http = mcp.get("http", {})
+        return MCPConfig(
+            enabled=mcp.get("enabled", True),
+            transport="streamable-http",
+            http_url=self._resolve_env_vars(http.get("url", "${MCP_SERVER_URL}")),
         )
 
     def get(self, key: str, default: Any = None) -> Any:

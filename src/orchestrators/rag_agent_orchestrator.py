@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from ..agents import SingleRAGAgent
-from ..tools import build_document_tools, calculate, fetch_webpage, web_search
+from ..tools import build_document_tools
 from .base import BaseOrchestrator
 from .state import RAGState
 
@@ -23,13 +23,27 @@ class RAGAgentOrchestrator(BaseOrchestrator):
     """Compiles the single-agent RAG subgraph."""
 
     async def _run_agent_node(self, state: RAGState) -> dict:
-        tools = build_document_tools(
+        document_tools = build_document_tools(
             embedder=self._embedder,
             retrieval_repo=self._retrieval_repo,
             memory_repo=self._memory_repo,
             session_id=state["session_id"],
             user_id=state["user_id"],
-        ) + [web_search, fetch_webpage, calculate]
+        )
+
+        # Load stateless tools from the MCP server.
+        # Falls back to empty list if MCP is unavailable — the agent adapts.
+        mcp = self._mcp_tool_loader
+        mcp_tools = mcp.get_tools([
+            "web_search",
+            "fetch_webpage",
+            "calculate",
+            "analyse",
+            "rav_idp_process_and_ingest",
+            "rav_idp_get_document_fidelity",
+        ]) if mcp else []
+
+        tools = document_tools + mcp_tools
 
         agent = SingleRAGAgent(
             chat_service=self._chat_service,
