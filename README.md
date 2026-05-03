@@ -87,6 +87,24 @@ Each branch adds one capability on top of the previous. Follow them in order.
   - `src/tools/` — high-level tools exposed to agents (`search_documents`, `web_search`, `fetch_webpage`, `calculate`, etc.)
   - `src/api/schemas.py` + UI — chat execution now uses `category` (`workflow` | `agent`) and `variant` (`fast`, `deep`, `single_rag_agent`, `supervisor_orchestration_agent`)
 
+### Branch: `mcp` (current)
+
+- Read `docs/agents.md` — updated with the two new workers and the full tool split between local (session-scoped document tools) and MCP (stateless utility, analysis, and extraction tools)
+- Stateless tools (`web_search`, `fetch_webpage`, `calculate`) moved out of the application process and into a dedicated MCP server: [mcp-tools-library](https://github.com/pritesh-2711/mcp-tools-library)
+- Two new tools introduced via the MCP server:
+  - **`analyse`** — runs pandas/Python code in an E2B cloud sandbox; no host filesystem exposure
+  - **`rav_idp_process_and_ingest` / `rav_idp_get_document_fidelity`** — document entity extraction with per-entity fidelity scoring (RaV-IDP pipeline)
+- Two new specialist worker agents introduced:
+  - **`DataAnalysisWorkerAgent`** — owns the `analyse` tool; handles quantitative EDA, statistics, and trend questions
+  - **`DocumentExtractionWorkerAgent`** — owns the RaV-IDP tools; handles entity extraction and document quality assessment
+- Application changes:
+  - `src/mcp_client.py` — `MCPToolLoader`: connects to the MCP server at startup (stdio subprocess or HTTP), loads all tools once, exposes them by name to orchestrators
+  - `src/agents/workers/` — two new workers added (`DataAnalysisWorkerAgent`, `DocumentExtractionWorkerAgent`)
+  - `src/agents/supervisor_agent.py` — two new delegation tools (`ask_data_analysis_worker`, `ask_document_extraction_worker`) on the supervisor
+  - `src/orchestrators/` — `BaseOrchestrator` and `RAGOrchestrator` accept `mcp_tool_loader`; agent orchestrators load tools from MCP at request time
+  - `src/tools/` — only session-scoped document tools remain local; stateless tools removed
+  - `src/core/models.py` + `configs/config.yaml` — `MCPConfig` controls transport (stdio or HTTP), server path/URL, and env vars forwarded to the subprocess
+
 ----
 
 ## What the initial version was lacking
@@ -124,8 +142,9 @@ Each branch adds one capability on top of the previous. Follow them in order.
   - **Fast mode** — resolve memory → retrieve → rerank → generate. No extra LLM calls. Optimised for latency.
   - **Deep mode** — intent analysis → optional HITL clarification (via `interrupt()`) → complexity routing → query rewrite or decomposition (Send API fan-out) → retrieve → rerank → generate → LLM-as-judge validation loop (max 3 iterations, best-response fallback).
 - [x] **Agentic orchestration** — Two agent variants selectable per request:
-  - **Single RAG Agent** — one agent with access to high-level document, web, and calculation tools.
-  - **Supervisor Orchestration Agent** — one supervisor delegating to specialist document, web, and computation workers via worker-facing delegation tools.
+  - **Single RAG Agent** — one agent with access to all high-level document, web, calculation, data analysis, and extraction tools.
+  - **Supervisor Orchestration Agent** — one supervisor delegating to five specialist workers (document research, web research, computation, data analysis, document extraction) via worker-facing delegation tools.
+- [x] **MCP tools library** — Stateless tools (`web_search`, `fetch_webpage`, `calculate`) and new tools (`analyse`, `rav_idp_*`) served from a dedicated MCP server ([mcp-tools-library](https://github.com/pritesh-2711/mcp-tools-library)). The application connects via `langchain-mcp-adapters` at startup and keeps the connection alive. Session-scoped document tools remain local.
 - [x] **SSE streaming** — Token-level streaming via `GET /sessions/{id}/stream`. Deep mode also emits `status` events naming the current node (e.g., "Checking query intent…", "Ranking relevant results…").
 - [x] **Unified execution contract** — Chat requests use `category + variant` so workflows and agents share one API surface:
   - `workflow / fast`
