@@ -426,7 +426,7 @@ class MemoryRepository:
                 if limit:
                     cur.execute(
                         """
-                        SELECT chat_id, session_id, sender, message, created_at
+                        SELECT chat_id, session_id, sender, message, created_at, orchestrator_metadata
                         FROM (
                             SELECT * FROM poc2prod.chats
                             WHERE session_id = %s
@@ -440,7 +440,7 @@ class MemoryRepository:
                 else:
                     cur.execute(
                         """
-                        SELECT chat_id, session_id, sender, message, created_at
+                        SELECT chat_id, session_id, sender, message, created_at, orchestrator_metadata
                         FROM poc2prod.chats
                         WHERE session_id = %s
                         ORDER BY created_at ASC;
@@ -456,16 +456,19 @@ class MemoryRepository:
         finally:
             conn.close()
 
-        return [
-            ChatRecord(
+        records = []
+        for row in rows:
+            meta = row["orchestrator_metadata"] or {}
+            charts = meta.get("charts", []) if isinstance(meta, dict) else []
+            records.append(ChatRecord(
                 chat_id=row["chat_id"],
                 session_id=row["session_id"],
                 sender=row["sender"],
                 message=row["message"],
                 created_at=row["created_at"],
-            )
-            for row in rows
-        ]
+                charts=charts,
+            ))
+        return records
 
     def get_session_documents(
         self,

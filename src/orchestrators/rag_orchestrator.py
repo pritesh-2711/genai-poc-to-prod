@@ -91,6 +91,7 @@ class RAGOrchestrator:
             mcp_tool_loader=mcp_tool_loader,
         )
 
+        self._chat_service = chat_service
         self._fast = FastOrchestrator(**shared_kwargs)
         self._deep = DeepOrchestrator(**shared_kwargs)
         self._agent = RAGAgentOrchestrator(**shared_kwargs)
@@ -138,6 +139,10 @@ class RAGOrchestrator:
     # ──────────────────────────────────────────────────────────────────────────
     # Public interface
     # ──────────────────────────────────────────────────────────────────────────
+
+    @property
+    def chat_service(self) -> "ChatService":
+        return self._chat_service
 
     async def ainvoke(self, initial_state: RAGState, thread_id: str) -> RAGState:
         """Start a new graph run and return the final state.

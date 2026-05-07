@@ -56,6 +56,7 @@ class RAGAgentOrchestrator(BaseOrchestrator):
             "final_response": result.response,
             "tools_used": result.tools_used,
             "agent_step_count": result.step_count,
+            "charts": result.charts,
         }
 
     def build_graph(self) -> CompiledStateGraph:

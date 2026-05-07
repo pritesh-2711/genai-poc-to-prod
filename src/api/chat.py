@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from ..core.exceptions import InputBlockedError
+from ..orchestrators.mermaid_utils import fix_mermaid_in_text
 from ..core.models import UserRecord
 from ..embedding.base import BaseEmbedder
 from ..memory.repository import MemoryRepository, MemoryRepositoryError
@@ -55,6 +56,7 @@ def _to_msg_response(record) -> ChatMessageResponse:
         sender=record.sender,
         message=record.message,
         created_at=record.created_at,
+        charts=getattr(record, "charts", []) or [],
     )
 
 
@@ -173,6 +175,8 @@ Handles workflow and agent turns, plus deep-workflow clarification resumes.
             or result.get("llm_response")
             or ""
         )
+        charts: list[str] = result.get("charts") or []
+        assistant_text = await fix_mermaid_in_text(assistant_text, orchestrator.chat_service)
         assistant_vec = embedder.embed_one(assistant_text)
         assistant_record = repo.add_message(
             session_id=session_id,
@@ -187,8 +191,10 @@ Handles workflow and agent turns, plus deep-workflow clarification resumes.
                 "validation_result": result.get("validation_result", ""),
                 "tools_used": result.get("tools_used", []),
                 "agent_step_count": result.get("agent_step_count", 0),
+                "charts": charts,
             },
         )
+        assistant_record.charts = charts
 
     except InputBlockedError:
         assistant_record = repo.add_message(
@@ -375,6 +381,10 @@ async def stream_message(
                 or (result or {}).get("llm_response")
                 or ""
             )
+            charts: list[str] = (result or {}).get("charts") or []
+
+            # Validate mermaid blocks; attempt LLM correction for any invalid ones
+            assistant_text = await fix_mermaid_in_text(assistant_text, orchestrator.chat_service)
 
             for word in assistant_text.split(" "):
                 yield _sse({"type": "token", "content": word + " "})
@@ -395,8 +405,10 @@ async def stream_message(
                         "validation_result": (result or {}).get("validation_result", ""),
                         "tools_used": (result or {}).get("tools_used", []),
                         "agent_step_count": (result or {}).get("agent_step_count", 0),
+                        "charts": charts,
                     },
                 )
+                assistant_record.charts = charts
             except MemoryRepositoryError as e:
                 yield _sse({"type": "error", "detail": str(e)})
                 return
