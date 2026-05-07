@@ -72,6 +72,7 @@ class RAGState(TypedDict, total=False):
     final_response: str
     tools_used: list[str]
     agent_step_count: int
+    charts: list[str]                    # base64 PNG charts produced by analyse tool
 
 
 class SubQueryState(TypedDict):

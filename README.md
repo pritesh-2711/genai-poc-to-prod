@@ -105,6 +105,44 @@ Each branch adds one capability on top of the previous. Follow them in order.
   - `src/tools/` — only session-scoped document tools remain local; stateless tools removed
   - `src/core/models.py` + `configs/config.yaml` — `MCPConfig` controls transport (stdio or HTTP), server path/URL, and env vars forwarded to the subprocess
 
+#### Visualisation and diagram support (current work)
+
+Charts from the `analyse` tool (E2B PNG output) and Mermaid flow diagrams from
+the LLM are now first-class response objects — rendered in the UI, persisted
+across sessions, and downloadable.
+
+#### Chart pipeline (`analyse` tool → PNG → UI)
+
+- `mcp-tools-library/server/tools/analysis.py` — `_extract_and_validate_charts()` scans
+  E2B `result.results` for `.png` attributes, validates each against PNG magic bytes
+  (`\x89PNG`), and includes valid images in the tool response under the `charts` key.
+- `src/agents/_shared.py` — `AgentRunResult` gains a `charts: list[str]` field.
+  `_extract_charts_from_messages()` scans LangChain `ToolMessage` objects for the
+  `charts` key, handling both plain-string and list-of-content-block content formats.
+- `src/orchestrators/state.py` — `RAGState` includes `charts: list[str]` in its output section.
+- `src/api/chat.py` — charts are stored in `orchestrator_metadata` JSONB alongside the
+  assistant message and returned in the SSE `done` event and non-streaming response.
+- `src/memory/repository.py` — `get_conversation_history` now SELECTs `orchestrator_metadata`
+  and extracts `charts` from it so chart images survive page refresh and session reload.
+- `src/api/schemas.py` — `ChatMessageResponse` includes `charts: list[str] = []`.
+- `src/core/models.py` — `ChatRecord` includes `charts: list = []`.
+
+#### Mermaid diagram pipeline (LLM text → rendered SVG)
+
+- `src/orchestrators/mermaid_utils.py` — new module with two helpers:
+  - `is_valid_mermaid(code)` — checks first non-blank non-comment line against all
+    known Mermaid diagram type keywords; also validates `subgraph`/`end` count parity
+    and rejects HTML entities that break Mermaid.js rendering.
+  - `fix_mermaid_in_text(text, chat_service)` — async; finds all ` ```mermaid ``` `
+    blocks, validates each, attempts one LLM self-correction pass for invalid blocks,
+    replaces unfixable blocks with empty string (silent removal).
+- `src/api/chat.py` — calls `fix_mermaid_in_text` before persisting or streaming the
+  assistant response, in both the streaming and non-streaming paths.
+- `src/chat_service.py` — `_MERMAID_RULES` constant appended to every `_build_system_prompt`
+  call, giving all execution modes (workflow fast/deep, both agent variants) consistent
+  instructions: use Mermaid for structural diagrams, use `analyse` + matplotlib for data
+  charts, never output raw SVG, plain ASCII labels only, every `subgraph` needs `end`.
+
 ----
 
 ## What the initial version was lacking
@@ -145,6 +183,7 @@ Each branch adds one capability on top of the previous. Follow them in order.
   - **Single RAG Agent** — one agent with access to all high-level document, web, calculation, data analysis, and extraction tools.
   - **Supervisor Orchestration Agent** — one supervisor delegating to five specialist workers (document research, web research, computation, data analysis, document extraction) via worker-facing delegation tools.
 - [x] **MCP tools library** — Stateless tools (`web_search`, `fetch_webpage`, `calculate`) and new tools (`analyse`, `rav_idp_*`) served from a dedicated MCP server ([mcp-tools-library](https://github.com/pritesh-2711/mcp-tools-library)). The application connects via `langchain-mcp-adapters` at startup and keeps the connection alive. Session-scoped document tools remain local.
+- [x] **Chart and diagram rendering** — The `analyse` tool returns E2B-generated PNG charts; charts are validated, threaded through the agent and orchestrator pipeline, persisted in `orchestrator_metadata` JSONB, and served back on session reload. LLM responses containing Mermaid code blocks are validated server-side (keyword check + subgraph/end parity + HTML entity check), corrected via one LLM retry if invalid, and rendered as interactive SVGs in the frontend. Both charts and diagrams support copy-to-clipboard and download from the UI.
 - [x] **SSE streaming** — Token-level streaming via `GET /sessions/{id}/stream`. Deep mode also emits `status` events naming the current node (e.g., "Checking query intent…", "Ranking relevant results…").
 - [x] **Unified execution contract** — Chat requests use `category + variant` so workflows and agents share one API surface:
   - `workflow / fast`

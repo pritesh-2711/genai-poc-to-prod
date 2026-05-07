@@ -177,6 +177,12 @@ threshold=0.3
 
 GEval was false-positiving on short greetings like "Hi" (scored below 0.5 because they aren't clearly "a legitimate question or request"). Lowering to 0.3 means only inputs that score strongly as malicious are blocked — actual injection/jailbreak attempts score near 0 so detection still works.
 
+#### Guardrail fix
+
+- `src/guardrails/input_guard.py` — short messages (< 40 chars) skip all DeepEval metric
+  checks. The `PromptSafety` GEval model was mis-scoring short conversational commands
+  ("retry that", "yes", "do it now") as low-safety and blocking them.
+
 ### 7. `ai_assistant_ui/Dockerfile` (new file)
 
 Two-stage build: Node 20 builds the Vite bundle; nginx 1.27 serves the static files.

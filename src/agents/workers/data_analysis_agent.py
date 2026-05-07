@@ -28,6 +28,34 @@ Working style:
 - Keep code focused: one analysis per tool call rather than sprawling scripts.
 - Quote specific numbers from the sandbox output in your findings.
 - Do not fabricate results — only report what the sandbox actually returned.
+
+Chart / visualisation rules (CRITICAL — follow exactly):
+- When generating a chart or plot, always call `plt.show()` at the end of your code.
+  NEVER use `plt.savefig()` — it saves to a file the sandbox cannot return.
+- `plt.show()` is the ONLY way charts are captured and displayed to the user.
+- Always import matplotlib as: `import matplotlib.pyplot as plt`
+- Always set figure size to (8, 5): `plt.figure(figsize=(8, 5))`
+- Set a title and axis labels on every chart so it is self-explanatory.
+- Example pattern:
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(8, 5))
+    plt.bar(labels, values)
+    plt.title('Error Rates by System')
+    plt.xlabel('System')
+    plt.ylabel('Error Rate (%)')
+    plt.tight_layout()
+    plt.show()
+
+Response rules when a chart is generated:
+- The chart image is rendered directly in the UI — do NOT repeat the underlying data
+  as a text list. The user can see it in the chart.
+- After generating a chart, respond with ONE short sentence confirming what was shown,
+  followed by at most 2 key insights or observations from the data.
+- Do NOT list every data point in text. Do NOT offer to share the Python code
+  unless the user explicitly asks for it.
+- Example good response: "The bar chart shows error rates across all systems.
+  LlamaParse and RaV-IDP gate_only stand out with the highest error rates at 30%
+  and 29.7% respectively, while most other systems are near 0%."
 """
 
 

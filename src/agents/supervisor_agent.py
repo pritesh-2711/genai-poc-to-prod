@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain.agents import create_agent
@@ -52,6 +52,41 @@ Rules:
 - Synthesize the worker outputs into one clear final answer for the user.
 - If evidence is incomplete, say what is known and what remains uncertain.
 - Do not expose raw chain-of-thought.
+
+Diagram and visualisation rules (CRITICAL — follow exactly):
+- When the user asks for a flow chart, process diagram, sequence diagram,
+  architecture diagram, mind map, or any structural/relational visualisation,
+  respond with a Mermaid diagram inside a fenced code block:
+    ```mermaid
+    flowchart TD
+        A[Start] --> B[Step]
+    ```
+- NEVER output raw SVG markup. NEVER describe the diagram in plain text when
+  a visual is explicitly requested.
+- The UI renders Mermaid natively — the user sees the actual diagram, not code.
+- Choose the most appropriate Mermaid diagram type:
+    - flowchart TD / LR  — process flows, pipelines, decision trees
+    - sequenceDiagram     — request/response or multi-party interactions
+    - classDiagram        — object/component relationships
+    - erDiagram           — data models
+    - gantt               — timelines or project schedules
+- Keep node labels concise (≤ 6 words). Use subgraph blocks to group related steps.
+- NEVER use HTML entities (&amp; &lt; &gt;) or raw HTML tags inside node labels.
+  Use plain ASCII: write "and" not "&", "<" not "&lt;". Node IDs must be short alphanumeric words.
+- Every `subgraph` must have a matching `end`.
+- Example of correct syntax:
+    ```mermaid
+    flowchart TD
+        A[Document Input] --> B[Quality Classifier]
+        B --> C{Pass?}
+        C -- Yes --> D[Layout Detector]
+        C -- No --> E[Reject]
+        D --> F[Entity Extractor]
+        F --> G[Reconstructor]
+        G --> H[Fidelity Comparator]
+        H --> I[Output]
+    ```
+- For data charts (bar, line, scatter) use the data_analysis worker with Python/matplotlib instead.
 """
 
 
@@ -60,6 +95,7 @@ class SupervisorAgentResult:
     response: str
     tools_used: list[str]
     step_count: int
+    charts: list[str] = field(default_factory=list)
 
 
 class SupervisorOrchestrationAgent:
@@ -91,7 +127,7 @@ class SupervisorOrchestrationAgent:
         )
         return f"{base}\n\n{_SUPERVISOR_PROMPT}"
 
-    def _build_worker_tools(self, worker_usage: list[str]):
+    def _build_worker_tools(self, worker_usage: list[str], chart_collection: list[str]):
         document_worker = self._document_worker
         web_worker = self._web_worker
         computation_worker = self._computation_worker
@@ -132,6 +168,7 @@ class SupervisorOrchestrationAgent:
             result = await data_analysis_worker.arun(task)
             worker_usage.append("data_analysis_worker")
             worker_usage.extend([f"data_analysis_worker:{name}" for name in result.tools_used])
+            chart_collection.extend(result.charts)
             return f"Data Analysis Worker Findings:\n{result.response}"
 
         @tool
@@ -156,9 +193,10 @@ class SupervisorOrchestrationAgent:
 
     async def arun(self, user_message: str) -> SupervisorAgentResult:
         worker_usage: list[str] = []
+        chart_collection: list[str] = []
         graph = create_agent(
             model=self._chat_service.llm_provider.llm,
-            tools=self._build_worker_tools(worker_usage),
+            tools=self._build_worker_tools(worker_usage, chart_collection),
             system_prompt=self._build_system_prompt(),
             name="supervisor_orchestration_agent",
         )
@@ -168,8 +206,11 @@ class SupervisorOrchestrationAgent:
             "The supervisor agent could not produce a final response.",
         )
         tools_used = extracted.tools_used + worker_usage
+        # Charts from sub-agents + any direct tool calls the supervisor itself made
+        all_charts = chart_collection + extracted.charts
         return SupervisorAgentResult(
             response=extracted.response,
             tools_used=tools_used,
             step_count=max(len(tools_used), 1),
+            charts=all_charts,
         )
