@@ -7,6 +7,7 @@ application served by Uvicorn. They communicate over HTTP/JSON using JWT Bearer 
 with a secondary SSE channel for streaming responses.
 
 The system is a session-scoped RAG assistant with two execution modes and two agent modes:
+
 - **Fast mode** — direct retrieval + reranking + generation (low latency)
 - **Deep mode** — intent analysis, optional clarification, query decomposition, retrieval, reranking, generation, and LLM-as-judge validation
 - **Single RAG Agent** — one agent with access to all document and MCP tools
@@ -58,7 +59,7 @@ python api_server.py         # starts on http://localhost:8000
 
 On startup you will see:
 
-```
+```text
 MCP tools loaded (6 tools): ['calculate', 'web_search', 'fetch_webpage',
                               'analyse', 'rav_idp_process_and_ingest',
                               'rav_idp_get_document_fidelity']
@@ -108,7 +109,7 @@ rewrite, or update `BASE_URL` in `src/api/client.ts` to point directly at the AP
 
 ### Sign-up (admin-gated)
 
-```
+```text
 User submits name + email + password
   → POST /api/auth/signup         (SignUpRequest)
   ← { message: "...", status: "pending" }   201
@@ -127,7 +128,7 @@ If a user tries to sign up with an already-registered email, the backend returns
 
 ### Sign-in
 
-```
+```text
 User submits email + password
   → POST /api/auth/signin         (SignInRequest)
 
@@ -139,7 +140,7 @@ User submits email + password
 
 On success:
 
-```
+```text
 Store token in localStorage
   → GET /api/auth/me              (Bearer <token>)
   ← { user_id, name, email, created_at }
@@ -149,7 +150,7 @@ Token stored; user redirected to /chat
 
 All subsequent requests attach the token as:
 
-```
+```text
 Authorization: Bearer <access_token>
 ```
 
@@ -162,7 +163,7 @@ On 401 from any request, the frontend clears the token and redirects to `/auth`.
 
 On app load after authentication:
 
-```
+```text
 GET /api/sessions
   ← SessionResponse[]   (newest first)
 
@@ -190,7 +191,7 @@ was triggered automatically during startup.
 
 ## Document upload flow
 
-```
+```text
 User clicks the upload button (left of the chat textarea)
   → POST /api/sessions/{session_id}/upload
       multipart/form-data: file, file_description (optional)
@@ -223,7 +224,7 @@ Frontend state after upload:
 
 ## Chat message flow (SSE streaming)
 
-```
+```text
 User types message, selects mode (fast/deep), presses Enter
   → GET /api/sessions/{session_id}/stream?message=...&mode=fast|deep
       (EventSource / fetch with ReadableStream)
@@ -262,7 +263,7 @@ Status events are deduplicated — if three parallel `retrieve_sub_query` nodes 
 
 When deep mode determines the query is unclear:
 
-```
+```text
 SSE: { type: "clarification", content: "Could you clarify...?" }
 User types reply
   → POST /api/sessions/{session_id}/stream/clarify
@@ -287,7 +288,7 @@ Retrieval is best-effort — if no documents are uploaded, the LLM responds from
 
 ## Document listing flow
 
-```
+```text
 On session select (ChatPage useEffect):
   → GET /api/sessions/{session_id}/documents
   ← DocumentRecord[] {
