@@ -28,6 +28,10 @@ DB_PORT=5432
 DB_NAME=poc2prod
 DB_USER=postgres          # use postgres superuser — see note below
 DB_PASSWORD=yourpassword
+
+# Required for MCP tools (agent modes)
+TAVILY_API_KEY=tvly-...  # web_search and fetch_webpage tools
+E2B_API_KEY=e2b_...      # analyse tool (Python/pandas in cloud sandbox)
 ```
 
 > **Note on DB_USER**: The `pgvector/pgvector:pg16` image creates a superuser from
@@ -36,6 +40,11 @@ DB_PASSWORD=yourpassword
 > connect as `postgres` instead.
 
 Leave all AWS vars blank — `storage.deployment: local` so they are never read at runtime.
+
+> **Note on MCP API keys**: `TAVILY_API_KEY` and `E2B_API_KEY` are only required for
+> agent modes (`single_rag_agent`, `supervisor_orchestration_agent`). Workflow modes
+> (`fast`, `deep`) work without them. If omitted, the MCP tools server still starts but
+> web search and data analysis tools will fail at invocation time.
 
 ---
 
@@ -46,6 +55,7 @@ docker compose up --build
 ```
 
 On the **first build** Docker will:
+
 - Pull `pgvector/pgvector:pg16` and run `sql/init.sql` (schema, extensions, indexes)
 - Build the backend image — this takes a while the first time because it:
   - Installs all system packages (`poppler-utils`, `tesseract-ocr`, `libreoffice`, etc.)
@@ -101,11 +111,12 @@ The following changes were required after cloning `pilot/` from `main/`. They ar
 ### 1. `Dockerfile` (new file)
 
 Two-stage build:
+
 - **Builder stage**: installs Python packages using `python:3.12-slim` + build tools (`build-essential`, `libpq-dev`, `libmagic-dev`)
 - **Runtime stage**: copies installed packages; installs all required system libraries:
 
 | Package | Reason |
-|---|---|
+| --- | --- |
 | `libpq5` | psycopg2 runtime |
 | `libxcb1`, `libgl1`, `libglib2.0-0` | OpenCV headless runtime |
 | `libgomp1` | GNU OpenMP — required by ONNX Runtime / layout models |
@@ -116,6 +127,7 @@ Two-stage build:
 | `libreoffice` | DOCX/PPTX/XLSX processing via Unstructured |
 
 Additional Dockerfile decisions:
+
 - **CPU-only torch**: torch and torchvision are installed from `download.pytorch.org/whl/cpu` before `requirements.txt` to avoid the 1.5 GB CUDA build. GPU is not needed — the LLM runs on OpenAI, and the reranker/embedder run fine on CPU.
 - **RapidOCR models pre-downloaded**: `RapidOCR()` is called during build as root. Without this, RapidOCR tries to download its ONNX weights to `site-packages/` at runtime and hits permission denied (container runs as non-root `appuser`).
 - **`opencv-python-headless` forced**: `easyocr` pulls in `opencv-python` (full, with X11 GUI deps) as its dependency. A `--force-reinstall opencv-python-headless` step after the main install ensures the headless version wins.
@@ -132,7 +144,7 @@ Local dev stack: `postgres` + `backend` (no Redis — `storage.deployment: local
 ### 3. `requirements.txt`
 
 | Change | Reason |
-|---|---|
+| --- | --- |
 | Removed `torch`, `torchvision` | Moved to Dockerfile pre-install step with CPU wheel index |
 | Removed `opencv-python` (non-headless) | Causes `libxcb.so.1: No such file or directory` inside container; headless variant is sufficient |
 | Added `onnxruntime>=1.19.0` | RapidOCR depends on it but it was missing from the file; without it Docling reports "No OCR engine found" |
@@ -216,7 +228,7 @@ docker exec -it poc2prod_postgres psql -U postgres -d poc2prod
 ## Known build behaviours (not errors)
 
 | Message | Meaning |
-|---|---|
+| --- | --- |
 | `Warning: You are sending unauthenticated requests to the HF Hub` | HuggingFace rate-limits unauthenticated pulls. Set `HF_TOKEN` in `.env` if builds are slow. |
 | `UNEXPECTED: roberta.embeddings.position_ids` | Expected when loading `BAAI/bge-reranker-base` from a different task architecture. Safe to ignore. |
 | `torch_dtype is deprecated! Use dtype instead!` | Upstream Docling warning, not our code. |
