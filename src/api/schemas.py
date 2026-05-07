@@ -85,6 +85,7 @@ class ChatMessageResponse(BaseModel):
     sender: str
     message: str
     created_at: datetime
+    charts: list[str] = []              # base64 PNG charts; populated on live responses only
 
     model_config = {"from_attributes": True}
 

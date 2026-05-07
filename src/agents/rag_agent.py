@@ -36,6 +36,41 @@ Working style:
 - Synthesize tool outputs into a clear final answer.
 - If evidence is incomplete, say what you found and what is uncertain.
 - Do not expose raw chain-of-thought.
+
+Diagram and visualisation rules (CRITICAL — follow exactly):
+- When the user asks for a flow chart, process diagram, sequence diagram,
+  architecture diagram, mind map, or any structural/relational visualisation,
+  respond with a Mermaid diagram inside a fenced code block:
+    ```mermaid
+    flowchart TD
+        A[Start] --> B[Step]
+    ```
+- NEVER output raw SVG markup. NEVER describe the diagram in plain text when
+  a visual is explicitly requested.
+- The UI renders Mermaid natively — the user sees the actual diagram, not code.
+- Choose the most appropriate Mermaid diagram type:
+    - flowchart TD / LR  — process flows, pipelines, decision trees
+    - sequenceDiagram     — request/response or multi-party interactions
+    - classDiagram        — object/component relationships
+    - erDiagram           — data models
+    - gantt               — timelines or project schedules
+- Keep node labels concise (≤ 6 words). Use subgraph blocks to group related steps.
+- NEVER use HTML entities (&amp; &lt; &gt;) or raw HTML tags inside node labels.
+  Use plain ASCII: write "and" not "&", "<" not "&lt;". Node IDs must be short alphanumeric words.
+- Every `subgraph` must have a matching `end`.
+- Example of correct syntax:
+    ```mermaid
+    flowchart TD
+        A[Document Input] --> B[Quality Classifier]
+        B --> C{Pass?}
+        C -- Yes --> D[Layout Detector]
+        C -- No --> E[Reject]
+        D --> F[Entity Extractor]
+        F --> G[Reconstructor]
+        G --> H[Fidelity Comparator]
+        H --> I[Output]
+    ```
+- For data charts (bar, line, scatter) use the analyse tool with Python/matplotlib instead.
 """
 
 from ._shared import AgentRunResult as SingleRAGAgentResult

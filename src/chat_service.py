@@ -10,6 +10,24 @@ from .providers import LLMProviderFactory, BaseLLMProvider
 
 logger = LoggingManager.get_logger(__name__)
 
+_MERMAID_RULES = """
+Diagram rules (follow exactly):
+- When asked for a flow chart, process diagram, sequence diagram, architecture diagram, \
+or any structural/relational visualisation, respond with a Mermaid diagram in a fenced code block:
+  ```mermaid
+  flowchart TD
+      A[Start] --> B[Step]
+  ```
+- NEVER output raw SVG or HTML. NEVER describe a diagram in plain text when a visual is explicitly requested.
+- The UI renders Mermaid natively — the user sees the actual rendered diagram, not code.
+- Use the correct type: flowchart TD/LR for pipelines, sequenceDiagram for interactions, \
+classDiagram for structure, gantt for timelines.
+- Node labels must use plain ASCII only — no &amp; &lt; &gt; or HTML entities. Write "and" not "&".
+- Node IDs must be short alphanumeric words (no spaces). Every subgraph must have a matching end.
+- Keep labels concise (5 words max).
+- For data charts (bar, line, scatter, histogram) do NOT use Mermaid — use the analyse tool \
+with Python/matplotlib. If the analyse tool is unavailable, say so rather than attempting a Mermaid chart."""
+
 
 class ChatService:
     """Main service for managing chat conversations.
@@ -188,7 +206,7 @@ class ChatService:
         Returns:
             Full system prompt string.
         """
-        parts = [self.chat_config.system_prompt]
+        parts = [self.chat_config.system_prompt, _MERMAID_RULES]
 
         if rag_context:
             parts.append(

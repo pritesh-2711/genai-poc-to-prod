@@ -129,3 +129,4 @@ class ChatRecord:
     sender: str
     message: str
     created_at: datetime
+    charts: list = field(default_factory=list)

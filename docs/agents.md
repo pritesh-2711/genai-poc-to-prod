@@ -215,6 +215,17 @@ Responsibilities:
 - Quote specific numbers from sandbox output; never fabricate results
 - Keep analysis code focused — one analysis per tool call
 
+Chart rules enforced in the worker prompt:
+
+- Always call `plt.show()` — never `plt.savefig()`. The sandbox only returns
+  display output; filesystem writes are not returned to the caller.
+- Always set `plt.figure(figsize=(8, 5))` for consistent chart dimensions.
+- When a chart is rendered, respond with one short sentence and at most two
+  key insights — do not repeat every data point in text alongside the image.
+- Charts are captured as base64 PNGs, validated in the MCP tool, threaded through
+  `AgentRunResult.charts` → `RAGState.charts` → SSE `done` event, persisted in
+  `orchestrator_metadata` JSONB, and returned on session reload.
+
 ### Document Extraction Worker
 
 Tools: `rav_idp_process_and_ingest`, `rav_idp_get_document_fidelity`
@@ -347,7 +358,12 @@ This mirrors the backend contract and keeps the user-facing distinction clear:
 
 - `src/agents/rag_agent.py` — `SingleRAGAgent`
 - `src/agents/supervisor_agent.py` — `SupervisorOrchestrationAgent` (5 delegation tools)
-- `src/agents/_shared.py` — `AgentRunResult`, `extract_agent_run_result`
+- `src/agents/_shared.py` — `AgentRunResult` (includes `charts: list[str]`), `extract_agent_run_result`, `_extract_charts_from_messages`
+
+### Diagram and visualisation utilities
+
+- `src/orchestrators/mermaid_utils.py` — `is_valid_mermaid()` + `fix_mermaid_in_text()`:
+  validates Mermaid blocks and attempts LLM self-correction before the response is persisted
 
 ### Worker agent files
 
