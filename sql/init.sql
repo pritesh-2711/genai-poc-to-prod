@@ -201,3 +201,63 @@ CREATE TRIGGER update_parenthierarchy_updated_at
     BEFORE UPDATE ON poc2prod.parenthierarchy
     FOR EACH ROW
     EXECUTE FUNCTION poc2prod.update_updated_at_column();
+
+-- ============================================================================
+-- TABLE: session_summaries
+-- Per-session LLM-generated summaries for intersession memory.
+-- One row per session; upserted nightly by the background job.
+-- ============================================================================
+
+CREATE TABLE poc2prod.session_summaries (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id           UUID NOT NULL REFERENCES poc2prod.users(user_id) ON DELETE CASCADE,
+    session_id        UUID NOT NULL UNIQUE REFERENCES poc2prod.sessions(session_id) ON DELETE CASCADE,
+    summary_text      TEXT NOT NULL,
+    summary_embedding VECTOR,       -- dimension matches active embedder (see config.yaml)
+    token_count       INT NOT NULL DEFAULT 0,
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_session_summaries_user_id ON poc2prod.session_summaries(user_id);
+
+CREATE TRIGGER update_session_summaries_updated_at
+    BEFORE UPDATE ON poc2prod.session_summaries
+    FOR EACH ROW
+    EXECUTE FUNCTION poc2prod.update_updated_at_column();
+
+-- ============================================================================
+-- TABLE: feedback
+-- Thumbs up/down ratings on assistant messages; one rating per user per message.
+-- ============================================================================
+
+CREATE TABLE poc2prod.feedback (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    chat_id     UUID NOT NULL REFERENCES poc2prod.chats(chat_id) ON DELETE CASCADE,
+    session_id  UUID NOT NULL REFERENCES poc2prod.sessions(session_id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES poc2prod.users(user_id) ON DELETE CASCADE,
+    rating      VARCHAR(4) NOT NULL CHECK (rating IN ('up', 'down')),
+    comment     TEXT,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (user_id, chat_id)
+);
+
+CREATE INDEX idx_feedback_chat_id ON poc2prod.feedback(chat_id);
+CREATE INDEX idx_feedback_user_id ON poc2prod.feedback(user_id);
+
+-- ============================================================================
+-- TABLE: chunk_scores
+-- RLHF quality scores for ingested chunks.
+-- positive_count / negative_count accumulated on each feedback submission.
+-- score is recomputed weekly by the chunk_scoring background job:
+--   score = (positive + 1) / (positive + negative + 2)  [Laplace smoothing]
+-- Default 0.5 = neutral (no feedback yet).
+-- ============================================================================
+
+CREATE TABLE poc2prod.chunk_scores (
+    chunk_id        UUID PRIMARY KEY REFERENCES poc2prod.ingestions(id) ON DELETE CASCADE,
+    positive_count  INT NOT NULL DEFAULT 0,
+    negative_count  INT NOT NULL DEFAULT 0,
+    score           FLOAT NOT NULL DEFAULT 0.5,
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);

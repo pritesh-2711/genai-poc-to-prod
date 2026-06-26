@@ -144,6 +144,7 @@ class ChatService:
         short_term_history: Optional[List[ChatRecord]] = None,
         long_term_history: Optional[List[dict]] = None,
         rag_context: Optional[str] = None,
+        intersession_context: Optional[str] = None,
     ) -> str:
         """Asynchronously get a response from the LLM.
 
@@ -173,7 +174,7 @@ class ChatService:
             response = await self.llm_provider.achat(
                 user_message=user_message,
                 system_prompt=self._build_system_prompt(
-                    short_term_history, long_term_history, rag_context
+                    short_term_history, long_term_history, rag_context, intersession_context
                 ),
             )
             logger.info("Successfully generated async response")
@@ -190,18 +191,19 @@ class ChatService:
         short_term_history: Optional[List[ChatRecord]] = None,
         long_term_history: Optional[List[dict]] = None,
         rag_context: Optional[str] = None,
+        intersession_context: Optional[str] = None,
     ) -> str:
         """Compose the system prompt with RAG context and split memory.
 
         Section order (closest to current message last):
-          base prompt → RAG excerpts → long-term (semantic) → short-term (recent)
+          base prompt → RAG excerpts → intersession summaries
+          → long-term (semantic) → short-term (recent)
 
         Args:
-            short_term_history: Last N ChatRecord objects, oldest first.
-            long_term_history:  Semantically similar past exchange dicts
-                                (keys: sender, message). Deduplicated against
-                                short-term by the caller.
-            rag_context:        Retrieved document passages.
+            short_term_history:    Last N ChatRecord objects, oldest first.
+            long_term_history:     Semantically similar past exchange dicts.
+            rag_context:           Retrieved document passages.
+            intersession_context:  Concatenated summaries of prior sessions.
 
         Returns:
             Full system prompt string.
@@ -216,6 +218,16 @@ class ChatService:
                 "--- Relevant Document Excerpts ---\n"
                 f"{rag_context}\n"
                 "--- End of Excerpts ---"
+            )
+
+        if intersession_context:
+            parts.append(
+                "\n\nThe following are summaries of the user's previous sessions. "
+                "Use them as background context where relevant, but do not surface "
+                "them unless the user's question relates to past work.\n\n"
+                "--- Previous Session Summaries ---\n"
+                f"{intersession_context}\n"
+                "--- End of Previous Session Summaries ---"
             )
 
         if long_term_history:
@@ -251,6 +263,7 @@ class ChatService:
         short_term_history: Optional[List[ChatRecord]] = None,
         long_term_history: Optional[List[dict]] = None,
         rag_context: Optional[str] = None,
+        intersession_context: Optional[str] = None,
     ):
         """Stream tokens from the LLM one chunk at a time.
 
@@ -265,7 +278,7 @@ class ChatService:
                 )
 
         system_prompt = self._build_system_prompt(
-            short_term_history, long_term_history, rag_context
+            short_term_history, long_term_history, rag_context, intersession_context
         )
         async for chunk in self.llm_provider.astream_chat(
             user_message=user_message,

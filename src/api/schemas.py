@@ -97,6 +97,22 @@ class SendMessageResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Feedback
+# ---------------------------------------------------------------------------
+
+class FeedbackRequest(BaseModel):
+    rating: Literal["up", "down"]
+    comment: Optional[str] = None
+
+
+class FeedbackResponse(BaseModel):
+    feedback_id: UUID
+    chat_id: UUID
+    session_id: UUID
+    rating: str
+
+
+# ---------------------------------------------------------------------------
 # File upload
 # ---------------------------------------------------------------------------
 

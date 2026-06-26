@@ -18,6 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from ..chat_service import ChatService
 from ..core.models import ChatConfig, RerankerConfig
+from ..databases.intersession import IntersessionRepository
 from ..databases.retrieval import PgVectorRetrievalRepository
 from ..embedding.base import BaseEmbedder
 from ..memory.repository import MemoryRepository
@@ -58,6 +59,9 @@ class BaseOrchestrator(ABC):
         reranker_config: RerankerConfig,
         chat_config: ChatConfig,
         mcp_tool_loader: MCPToolLoader | None = None,
+        intersession_repo: IntersessionRepository | None = None,
+        intersession_max_summaries: int = 5,
+        intersession_max_tokens: int = 2000,
     ) -> None:
         self._embedder = embedder
         self._retrieval_repo = retrieval_repo
@@ -67,6 +71,9 @@ class BaseOrchestrator(ABC):
         self._reranker_config = reranker_config
         self._chat_config = chat_config
         self._mcp_tool_loader = mcp_tool_loader
+        self._intersession_repo = intersession_repo
+        self._intersession_max_summaries = intersession_max_summaries
+        self._intersession_max_tokens = intersession_max_tokens
 
     @abstractmethod
     def build_graph(self) -> CompiledStateGraph:
@@ -79,8 +86,9 @@ class BaseOrchestrator(ABC):
     # ──────────────────────────────────────────────────────────────────────────
 
     async def _resolve_memory_node(self, state: RAGState) -> dict:
-        """Fetch short-term and long-term conversation memory."""
+        """Fetch short-term, long-term, and intersession conversation memory."""
         session_id = UUID(state["session_id"])
+        user_id_str = state.get("user_id", "")
         query_vec = state["query_embedding"]
         user_chat_id = state.get("user_chat_id", "")
         short_term_limit = self._chat_config.short_term_limit
@@ -92,34 +100,57 @@ class BaseOrchestrator(ABC):
         short_term_history = raw_history[:-1]  # exclude the just-added user message
 
         session_exceeds_limit = len(raw_history) == short_term_limit + 1
-        if not session_exceeds_limit:
-            return {
-                "short_term_history": short_term_history,
-                "long_term_history": [],
-            }
+        long_term_history: list = []
+        if session_exceeds_limit:
+            long_term_raw = await self._retrieval_repo.search_conversation_history(
+                query_embedding=query_vec,
+                session_id=session_id,
+                top_k=_LONG_TERM_TOP_K,
+                exclude_chat_id=user_chat_id,
+            )
+            long_term_above_threshold = [
+                r for r in long_term_raw if r["similarity"] >= similarity_threshold
+            ]
+            short_term_ids = {str(r.chat_id) for r in short_term_history}
+            long_term_history = [
+                r for r in long_term_above_threshold if r["chat_id"] not in short_term_ids
+            ]
 
-        long_term_raw = await self._retrieval_repo.search_conversation_history(
-            query_embedding=query_vec,
-            session_id=session_id,
-            top_k=_LONG_TERM_TOP_K,
-            exclude_chat_id=user_chat_id,
-        )
-
-        long_term_above_threshold = [
-            r for r in long_term_raw if r["similarity"] >= similarity_threshold
-        ]
-        short_term_ids = {str(r.chat_id) for r in short_term_history}
-        long_term_history = [
-            r for r in long_term_above_threshold if r["chat_id"] not in short_term_ids
-        ]
+        # ── Intersession memory ───────────────────────────────────────────────
+        intersession_context = ""
+        if self._intersession_repo and user_id_str:
+            try:
+                user_id = UUID(user_id_str)
+                summaries = await self._intersession_repo.get_relevant_summaries(
+                    user_id=user_id,
+                    query_embedding=query_vec,
+                    exclude_session_id=session_id,
+                    top_k=self._intersession_max_summaries,
+                )
+                if summaries:
+                    max_chars = self._intersession_max_tokens * 4
+                    parts: list[str] = []
+                    total = 0
+                    for s in summaries:
+                        text = s["summary_text"].strip()
+                        if total + len(text) > max_chars:
+                            text = text[: max_chars - total]
+                        parts.append(text)
+                        total += len(text)
+                        if total >= max_chars:
+                            break
+                    intersession_context = "\n\n".join(parts)
+            except Exception as exc:
+                logger.warning(f"[memory] intersession lookup failed: {exc}")
 
         logger.debug(
             f"[memory] session={session_id} | short={len(short_term_history)} "
-            f"long={len(long_term_history)}"
+            f"long={len(long_term_history)} intersession={bool(intersession_context)}"
         )
         return {
             "short_term_history": short_term_history,
             "long_term_history": long_term_history,
+            "intersession_context": intersession_context,
         }
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -189,7 +220,7 @@ class BaseOrchestrator(ABC):
         raw_chunks: list[dict] = state.get("raw_chunks") or []
 
         if not raw_chunks:
-            return {"reranked_chunks": [], "rag_context": ""}
+            return {"reranked_chunks": [], "rag_context": "", "retrieved_chunk_ids": []}
 
         # ── 1. Cross-encoder reranking ────────────────────────────────────────
         query = state.get("original_query", "")
@@ -201,7 +232,7 @@ class BaseOrchestrator(ABC):
             reranked = raw_chunks[:top_k]
 
         if not reranked:
-            return {"reranked_chunks": [], "rag_context": ""}
+            return {"reranked_chunks": [], "rag_context": "", "retrieved_chunk_ids": []}
 
         # ── 2. Fetch parent contexts for top-K reranked chunks ────────────────
         session_id = UUID(state["session_id"])
@@ -275,7 +306,12 @@ class BaseOrchestrator(ABC):
             total += len(snippet)
 
         rag_context = "\n\n".join(context_parts)
-        return {"reranked_chunks": reranked, "rag_context": rag_context}
+        retrieved_chunk_ids = [c["child_id"] for c in reranked if c.get("child_id")]
+        return {
+            "reranked_chunks": reranked,
+            "rag_context": rag_context,
+            "retrieved_chunk_ids": retrieved_chunk_ids,
+        }
 
     # ──────────────────────────────────────────────────────────────────────────
     # Shared node: generate
@@ -289,6 +325,7 @@ class BaseOrchestrator(ABC):
         rag_context = state.get("rag_context") or None
         short_term_history = state.get("short_term_history") or []
         long_term_history = state.get("long_term_history") or []
+        intersession_context = state.get("intersession_context") or None
         correction_note = state.get("correction_note", "")
 
         # Prepend correction guidance when retrying after a failed validation
@@ -304,6 +341,7 @@ class BaseOrchestrator(ABC):
             short_term_history=short_term_history,
             long_term_history=long_term_history,
             rag_context=rag_context,
+            intersession_context=intersession_context,
         )
 
         iteration = state.get("iteration_count", 0)

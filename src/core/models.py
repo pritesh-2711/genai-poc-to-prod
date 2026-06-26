@@ -7,6 +7,32 @@ import uuid
 
 
 @dataclass
+class IntersessionConfig:
+    """Configuration for the intersession memory background job."""
+
+    enabled: bool = True
+    summary_interval_hours: int = 24          # how often to regenerate summaries
+    max_summaries_per_prompt: int = 5         # max previous-session summaries to inject
+    intersession_context_max_tokens: int = 2000  # token budget for all summaries combined
+
+
+@dataclass
+class ChunkScoringConfig:
+    """Configuration for the RLHF chunk-scoring background job."""
+
+    interval_hours: int = 168    # weekly recomputation
+    rlhf_alpha: float = 0.2      # weight of quality score vs cosine similarity in retrieval
+
+
+@dataclass
+class JobsConfig:
+    """Configuration for all background jobs."""
+
+    intersession: IntersessionConfig = field(default_factory=IntersessionConfig)
+    chunk_scoring: ChunkScoringConfig = field(default_factory=ChunkScoringConfig)
+
+
+@dataclass
 class EmbeddingConfig:
     """Configuration for the active embedding provider."""
 

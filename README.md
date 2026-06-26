@@ -87,7 +87,25 @@ Each branch adds one capability on top of the previous. Follow them in order.
   - `src/tools/` — high-level tools exposed to agents (`search_documents`, `web_search`, `fetch_webpage`, `calculate`, etc.)
   - `src/api/schemas.py` + UI — chat execution now uses `category` (`workflow` | `agent`) and `variant` (`fast`, `deep`, `single_rag_agent`, `supervisor_orchestration_agent`)
 
-### Branch: `mcp` (current)
+### Branch: `feature/intersession-feedback` (current)
+
+- Read `docs/design_intuition.md` (Part 6) — explains intersession memory design, RLHF-lite weighted retrieval, and the Laplace-smoothed chunk scoring formula
+- Application changes:
+  - `src/databases/intersession.py` — `IntersessionRepository` (asyncpg): stores per-session LLM-generated summaries with pgvector embeddings; retrieves top-K semantically similar prior-session summaries at query time; Laplace-smoothed chunk score recomputation
+  - `src/jobs/` — APScheduler background jobs: `run_intersession_memory_job` (nightly, summarises sessions via LLM, embeds summaries); `run_chunk_scoring_job` (weekly, recomputes Laplace scores from raw feedback counts)
+  - `src/orchestrators/state.py` — `RAGState` gains `intersession_context: str` and `retrieved_chunk_ids: list[str]`
+  - `src/orchestrators/base.py` — `_resolve_memory_node` fetches and injects intersession summaries; `_rerank_and_build_context_node` records the child chunk UUIDs that were used
+  - `src/chat_service.py` — `_build_system_prompt` injects intersession summaries between RAG context and long-term memory
+  - `src/databases/retrieval.py` — `PgVectorRetrievalRepository.search()` LEFT JOINs `chunk_scores` and ranks by `(1-α)·cosine + α·quality_score` (RLHF-weighted)
+  - `src/memory/repository.py` — `save_feedback()` and `attribute_feedback_to_chunks()` for the new `feedback` and `chunk_scores` tables
+  - `src/api/chat.py` — `POST /sessions/{id}/messages/{chat_id}/feedback` endpoint; `retrieved_chunk_ids` stored in `orchestrator_metadata`
+  - `src/api/schemas.py` — `FeedbackRequest`, `FeedbackResponse`
+  - `src/core/models.py` + `configs/config.yaml` — `IntersessionConfig`, `ChunkScoringConfig`, `JobsConfig` dataclasses; `jobs:` YAML block
+  - `sql/init.sql` — three new tables: `session_summaries`, `feedback`, `chunk_scores`
+  - `requirements.txt` — `apscheduler>=3.10.4`
+  - Frontend — thumbs up/down `FeedbackBar` on every assistant message bubble; `feedbackState` in Zustand `chatStore` with optimistic update + rollback; `submitFeedback` in `chatApi`; `FeedbackRequest`/`FeedbackResponse` types
+
+### Branch: `mcp`
 
 - Read `docs/agents.md` — updated with the two new workers and the full tool split between local (session-scoped document tools) and MCP (stateless utility, analysis, and extraction tools)
 - Stateless tools (`web_search`, `fetch_webpage`, `calculate`) moved out of the application process and into a dedicated MCP server: [mcp-tools-library](https://github.com/pritesh-2711/mcp-tools-library)
@@ -184,6 +202,8 @@ across sessions, and downloadable.
   - **Supervisor Orchestration Agent** — one supervisor delegating to five specialist workers (document research, web research, computation, data analysis, document extraction) via worker-facing delegation tools.
 - [x] **MCP tools library** — Stateless tools (`web_search`, `fetch_webpage`, `calculate`) and new tools (`analyse`, `rav_idp_*`) served from a dedicated MCP server ([mcp-tools-library](https://github.com/pritesh-2711/mcp-tools-library)). The application connects via `langchain-mcp-adapters` at startup and keeps the connection alive. Session-scoped document tools remain local.
 - [x] **Chart and diagram rendering** — The `analyse` tool returns E2B-generated PNG charts; charts are validated, threaded through the agent and orchestrator pipeline, persisted in `orchestrator_metadata` JSONB, and served back on session reload. LLM responses containing Mermaid code blocks are validated server-side (keyword check + subgraph/end parity + HTML entity check), corrected via one LLM retry if invalid, and rendered as interactive SVGs in the frontend. Both charts and diagrams support copy-to-clipboard and download from the UI.
+- [x] **Intersession memory** — Background job (nightly by default, configurable via `jobs.intersession.summary_interval_hours`) summarises each user session using the LLM, embeds the summary with pgvector, and stores it in `session_summaries`. At query time, the `_resolve_memory_node` fetches the top-K most semantically similar prior-session summaries (cosine search over the user's own summaries, excluding the current session) and injects them into the system prompt between RAG context and long-term memory. Total injected text is capped at `intersession_context_max_tokens` (configurable). Token count is approximated as `len(text) / 4`.
+- [x] **Feedback Learning (RLHF-lite)** — Thumbs up/down rating UI on every persisted assistant message. `POST /sessions/{id}/messages/{chat_id}/feedback` stores the rating in the `feedback` table and synchronously increments positive/negative counters in `chunk_scores` for the chunks that contributed to that response (extracted from `orchestrator_metadata.retrieved_chunk_ids`). A weekly background job recomputes each chunk's quality score using Laplace smoothing: `score = (positive + 1) / (positive + negative + 2)`. Retrieval ranking blends cosine similarity with the quality score: `(1 - α) × cosine + α × chunk_score`, where `α = rlhf_alpha` (default 0.2, configurable). Chunks with no feedback default to 0.5 (neutral — not boosted or penalised).
 - [x] **SSE streaming** — Token-level streaming via `GET /sessions/{id}/stream`. Deep mode also emits `status` events naming the current node (e.g., "Checking query intent…", "Ranking relevant results…").
 - [x] **Unified execution contract** — Chat requests use `category + variant` so workflows and agents share one API surface:
   - `workflow / fast`
@@ -194,7 +214,6 @@ across sessions, and downloadable.
 
 ## Still to address
 
-- [ ] Feedback Learning
 - [ ] Post-LLM Evaluations (response quality, hallucination, relevance)
 - [ ] True token-level streaming (replace word-split with `stream_mode="messages"`)
 - [ ] Show decomposed sub-queries to user before retrieval runs

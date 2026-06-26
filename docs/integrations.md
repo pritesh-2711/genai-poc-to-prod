@@ -1,4 +1,4 @@
-# Integration Document: Frontend ↔ Backend ↔ MCP Tools
+# Integration Document: Frontend - Backend - MCP Tools
 
 ## Overview
 
@@ -64,6 +64,8 @@ MCP tools loaded (6 tools): ['calculate', 'web_search', 'fetch_webpage',
                               'analyse', 'rav_idp_process_and_ingest',
                               'rav_idp_get_document_fidelity']
 Application startup complete. LLM=openai/gpt-4.1-mini, ..., MCP=stdio
+Intersession memory job scheduled (interval=24h)
+Chunk scoring job scheduled (interval=168h)
 ```
 
 If MCP fails to connect the app still starts — agent modes run with only local
@@ -336,7 +338,7 @@ Results are grouped by filename from `poc2prod.ingestions` using `COUNT(DISTINCT
 | sender | text | `'user'` \| `'assistant'` |
 | message | text | |
 | embeddings | vector | pgvector; used for long-term memory search |
-| orchestrator_metadata | jsonb | mode, intent, complexity, iteration_count, etc. |
+| orchestrator_metadata | jsonb | mode, intent, complexity, iteration_count, `retrieved_chunk_ids` (list of child chunk UUIDs used in final RAG context), charts (base64 PNGs), etc. |
 | created_at | timestamptz | |
 
 ### `parenthierarchy` — large parent chunks (≈2000 chars), not embedded
@@ -365,6 +367,47 @@ Results are grouped by filename from `poc2prod.ingestions` using `COUNT(DISTINCT
 | metadata | jsonb | `{ page, type, bbox? }` |
 | content_type | varchar(20) | `'text'` \| `'table'` \| `'image'` |
 | created_at | timestamptz | |
+
+### `session_summaries` — intersession memory
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| id | uuid PK | |
+| user_id | uuid FK | ON DELETE CASCADE |
+| session_id | uuid FK | UNIQUE; ON DELETE CASCADE |
+| summary_text | text | LLM-generated summary of the session |
+| summary_embedding | vector | pgvector; used for cosine similarity lookup |
+| token_count | int | approximate token count (`len(summary) // 4`) |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+Populated by the nightly `run_intersession_memory_job`. Upserted on `session_id` conflict so re-runs update existing summaries.
+
+### `feedback` — thumbs up / down ratings
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| id | uuid PK | |
+| chat_id | uuid FK | ON DELETE CASCADE; references `chats` |
+| session_id | uuid FK | ON DELETE CASCADE; references `sessions` |
+| user_id | uuid FK | ON DELETE CASCADE; references `users` |
+| rating | varchar(4) | `'up'` \| `'down'` — CHECK constraint |
+| comment | text | optional free-text comment |
+| created_at | timestamptz | |
+
+UNIQUE on `(user_id, chat_id)` — upserted so a user can change their rating.
+
+### `chunk_scores` — RLHF quality scores per chunk
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| chunk_id | uuid PK | FK → `ingestions(id)` ON DELETE CASCADE |
+| positive_count | int | cumulative thumbs-up count |
+| negative_count | int | cumulative thumbs-down count |
+| score | float | Laplace-smoothed quality score: `(pos+1)/(pos+neg+2)` |
+| updated_at | timestamptz | |
+
+Default `score = 0.5` (neutral). Updated synchronously on feedback submit (counter increment) and recomputed in batch by the weekly `run_chunk_scoring_job`.
 
 ---
 
@@ -421,6 +464,25 @@ All types in `src/types/api.ts` mirror `src/api/schemas.py` field-for-field.
 { "message": "...", "mode": "fast" }
 ```
 
+### Feedback endpoint
+
+| Method | Path                                            | Request body      | Response               |
+|--------|-------------------------------------------------|-------------------|------------------------|
+| POST   | /sessions/{id}/messages/{chat_id}/feedback      | FeedbackRequest   | FeedbackResponse 201   |
+
+**`FeedbackRequest`**
+```json
+{ "rating": "up" | "down", "comment": "optional free text" }
+```
+
+**`FeedbackResponse`**
+```json
+{ "feedback_id": "uuid", "chat_id": "uuid", "session_id": "uuid", "rating": "up" }
+```
+
+Re-submitting feedback for the same `(user_id, chat_id)` pair upserts the row — the rating can be changed.
+On submit, `retrieved_chunk_ids` from `orchestrator_metadata` are read synchronously to increment the correct counters in `chunk_scores`.
+
 ### Document endpoints
 
 | Method | Path                           | Request body / form          | Response                   |
@@ -447,7 +509,7 @@ Three Zustand stores:
 
 **`authStore`** — token, user profile, signin/signup/signout/loadMe actions.
 
-**`chatStore`** — sessions list, active session ID, messages, send/create/delete actions. Gains `statusContent: string | null` for deep mode node status, cleared on `done`/`error`/`clarification` events.
+**`chatStore`** — sessions list, active session ID, messages, send/create/delete actions. Gains `statusContent: string | null` for deep mode node status, cleared on `done`/`error`/`clarification` events. Also holds `feedbackState: Record<string, 'up' | 'down'>` (keyed by `chat_id`) updated optimistically on feedback submit, rolled back on API failure.
 
 **`documentsStore`** — per-session document lists, upload queue with status tracking (`uploading → processing → done | error`), drive panel open/close state.
 
@@ -563,3 +625,37 @@ via `reset()` so stale session data is never shown after sign-out.
 |------|--------|
 | `src/pages/SignUp.tsx` | Removed auto sign-in after signup. Shows "Request submitted" confirmation screen with `CheckCircle2` icon and link back to sign-in. |
 | `src/services/api.ts` | `signUp()` return type changed from `Promise<User>` to `Promise<{ message: string; status: string }>`. |
+
+### Backend — intersession memory + RLHF-lite feedback
+
+| File | Change |
+|------|--------|
+| `sql/init.sql` | Three new tables appended: `session_summaries` (intersession memory with pgvector), `feedback` (thumbs up/down ratings), `chunk_scores` (RLHF quality counters + Laplace score). |
+| `src/core/models.py` | Added `IntersessionConfig`, `ChunkScoringConfig`, `JobsConfig` dataclasses. |
+| `src/core/config.py` | Added `_build_jobs_config()` method; `self.jobs_config` populated in `__init__`. |
+| `configs/config.yaml` | Added `jobs:` block (`intersession.enabled`, `summary_interval_hours`, `max_summaries_per_prompt`, `intersession_context_max_tokens`; `chunk_scoring.interval_hours`, `rlhf_alpha`). |
+| `requirements.txt` | Added `apscheduler>=3.10.4`. |
+| `src/databases/intersession.py` | New. `IntersessionRepository` (asyncpg): `upsert_session_summary`, `get_relevant_summaries` (cosine search, excludes current session), `get_sessions_for_summary`, `get_session_chat_history_text`, `recompute_chunk_scores` (Laplace batch update). |
+| `src/jobs/__init__.py` | New. Empty package init. |
+| `src/jobs/intersession_memory.py` | New. `run_intersession_memory_job` — iterates all sessions, summarises dialogue via LLM (max 16 000 chars of history), embeds summary, upserts to `session_summaries`. |
+| `src/jobs/chunk_scoring.py` | New. `run_chunk_scoring_job` — delegates to `IntersessionRepository.recompute_chunk_scores()`. |
+| `src/jobs/scheduler.py` | New. `create_scheduler()` factory: builds `AsyncIOScheduler` with interval jobs wired to config; returns scheduler (not yet started). |
+| `src/orchestrators/state.py` | Added `intersession_context: str` and `retrieved_chunk_ids: list[str]` to `RAGState`. |
+| `src/orchestrators/base.py` | `_resolve_memory_node` fetches top-K intersession summaries and builds truncated `intersession_context` string. `_rerank_and_build_context_node` collects `retrieved_chunk_ids` from reranked chunks. `_generate_node` passes `intersession_context` to `chat_service.get_response_async()`. |
+| `src/orchestrators/rag_orchestrator.py` | Accepts `intersession_repo` and `intersession_config` params; passes them through `shared_kwargs`. |
+| `src/chat_service.py` | `get_response_async`, `stream_response_async`, `_build_system_prompt` accept `intersession_context: Optional[str]`; injected between RAG context and long-term memory in the system prompt. |
+| `src/databases/retrieval.py` | `PgVectorRetrievalRepository.__init__` accepts `rlhf_alpha`. `search()` LEFT JOINs `chunk_scores`; ORDER BY `(1-alpha)*cosine + alpha*COALESCE(score, 0.5) DESC`. |
+| `src/memory/repository.py` | Added `save_feedback()` (INSERT/ON CONFLICT upsert to `feedback`) and `attribute_feedback_to_chunks()` (reads `orchestrator_metadata.retrieved_chunk_ids`, updates `chunk_scores` counters). |
+| `src/api/schemas.py` | Added `FeedbackRequest` and `FeedbackResponse`. |
+| `src/api/chat.py` | Added `POST /sessions/{id}/messages/{chat_id}/feedback` endpoint. Stores `retrieved_chunk_ids` in `orchestrator_metadata` for both streaming and non-streaming paths. |
+| `src/api/main.py` | Lifespan creates `IntersessionRepository`, passes `rlhf_alpha` to `PgVectorRetrievalRepository`, wires `intersession_repo` + `intersession_config` to `RAGOrchestrator`, creates and starts APScheduler. |
+
+### Frontend — feedback UI
+
+| File | Change |
+|------|--------|
+| `src/types/api.ts` | Added `FeedbackRequest` and `FeedbackResponse` interfaces. |
+| `src/api/client.ts` | Added `chatApi.submitFeedback(sessionId, chatId, body)` — `POST /sessions/{sessionId}/messages/{chatId}/feedback`. |
+| `src/store/chatStore.ts` | Added `feedbackState: Record<string, FeedbackRating>` state field; `submitFeedback(sessionId, chatId, rating, comment?)` action with optimistic update and rollback on failure. `reset()` clears `feedbackState`. |
+| `src/components/MessageBubble.tsx` | Added `FeedbackBar` inline component (thumbs up/down icon buttons with green/red highlight on selection). Rendered below charts on persisted assistant messages only (requires `chatId` + `sessionId` props). Added `chatId?: string` and `sessionId?: string` to component props. |
+| `src/components/ChatArea.tsx` | Passes `chatId` and `sessionId` to `MessageBubble` for assistant messages. |

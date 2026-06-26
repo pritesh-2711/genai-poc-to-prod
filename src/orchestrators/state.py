@@ -58,6 +58,7 @@ class RAGState(TypedDict, total=False):
     # ── Memory (generation-only; NOT used in retrieval) ──────────────────────
     short_term_history: list
     long_term_history: list
+    intersession_context: str           # summaries of prior sessions (injected into prompt)
 
     # ── Generation ────────────────────────────────────────────────────────────
     llm_response: str
@@ -67,6 +68,9 @@ class RAGState(TypedDict, total=False):
     validation_result: Literal["pass", "fail", ""]
     correction_note: str                # guidance fed back into the next generate call
     iteration_count: int
+
+    # ── Retrieval metadata ────────────────────────────────────────────────────
+    retrieved_chunk_ids: list[str]      # child chunk UUIDs used in the final RAG context
 
     # ── Output ───────────────────────────────────────────────────────────────
     final_response: str
