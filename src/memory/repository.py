@@ -520,6 +520,136 @@ class MemoryRepository:
             for row in rows
         ]
 
+    # ------------------------------------------------------------------
+    # Feedback
+    # ------------------------------------------------------------------
+
+    def save_feedback(
+        self,
+        chat_id: uuid.UUID,
+        session_id: uuid.UUID,
+        user_id: uuid.UUID,
+        rating: str,
+        comment: Optional[str] = None,
+    ) -> uuid.UUID:
+        """Persist a thumbs-up / thumbs-down rating on an assistant message.
+
+        Raises:
+            ValueError: If a rating from this user for this message already exists.
+            MemoryRepositoryError: On any database error.
+
+        Returns:
+            UUID of the created feedback row.
+        """
+        conn = self._connect()
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO poc2prod.feedback
+                        (chat_id, session_id, user_id, rating, comment)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, chat_id) DO UPDATE SET
+                        rating  = EXCLUDED.rating,
+                        comment = EXCLUDED.comment
+                    RETURNING id;
+                    """,
+                    (str(chat_id), str(session_id), str(user_id), rating, comment),
+                )
+                row = cur.fetchone()
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"DB error saving feedback: {e}")
+                raise MemoryRepositoryError(f"Database error: {e}")
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+
+        return row["id"]
+
+    def attribute_feedback_to_chunks(
+        self,
+        chat_id: uuid.UUID,
+        rating: str,
+    ) -> int:
+        """Increment positive or negative counts for all chunks cited in a message.
+
+        Looks up the assistant message's orchestrator_metadata['retrieved_chunk_ids']
+        to find which chunks were used, then upserts into chunk_scores.
+
+        Returns:
+            Number of chunk_scores rows affected.
+        """
+        conn = self._connect()
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                cur.execute(
+                    """
+                    SELECT orchestrator_metadata
+                    FROM poc2prod.chats
+                    WHERE chat_id = %s;
+                    """,
+                    (str(chat_id),),
+                )
+                row = cur.fetchone()
+            except Exception as e:
+                logger.error(f"DB error reading chat metadata: {e}")
+                raise MemoryRepositoryError(f"Database error: {e}")
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+
+        if row is None:
+            return 0
+
+        meta = row["orchestrator_metadata"] or {}
+        if isinstance(meta, str):
+            import json as _json
+            meta = _json.loads(meta)
+
+        chunk_ids: List[str] = meta.get("retrieved_chunk_ids", [])
+        if not chunk_ids:
+            return 0
+
+        pos_delta = 1 if rating == "up" else 0
+        neg_delta = 1 if rating == "down" else 0
+
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            try:
+                cur.executemany(
+                    """
+                    INSERT INTO poc2prod.chunk_scores (chunk_id, positive_count, negative_count, score)
+                    VALUES (%s, %s, %s, 0.5)
+                    ON CONFLICT (chunk_id) DO UPDATE SET
+                        positive_count = poc2prod.chunk_scores.positive_count + EXCLUDED.positive_count,
+                        negative_count = poc2prod.chunk_scores.negative_count + EXCLUDED.negative_count,
+                        updated_at     = NOW();
+                    """,
+                    [(cid, pos_delta, neg_delta) for cid in chunk_ids],
+                )
+                conn.commit()
+                affected = len(chunk_ids)
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"DB error attributing feedback to chunks: {e}")
+                raise MemoryRepositoryError(f"Database error: {e}")
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+
+        logger.debug(
+            f"[feedback] attributed rating='{rating}' to {affected} chunks for chat {chat_id}"
+        )
+        return affected
+
     def get_chunks_by_filename(
         self,
         session_id: uuid.UUID,

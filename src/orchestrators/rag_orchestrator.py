@@ -37,7 +37,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from ..chat_service import ChatService
-from ..core.models import ChatConfig, RerankerConfig
+from ..core.models import ChatConfig, IntersessionConfig, RerankerConfig
+from ..databases.intersession import IntersessionRepository
 from ..databases.retrieval import PgVectorRetrievalRepository
 from ..embedding.base import BaseEmbedder
 from ..memory.repository import MemoryRepository
@@ -79,6 +80,8 @@ class RAGOrchestrator:
         chat_config: ChatConfig,
         checkpointer: Optional[BaseCheckpointSaver] = None,
         mcp_tool_loader: Optional[MCPToolLoader] = None,
+        intersession_repo: Optional[IntersessionRepository] = None,
+        intersession_config: Optional[IntersessionConfig] = None,
     ) -> None:
         shared_kwargs = dict(
             embedder=embedder,
@@ -89,6 +92,15 @@ class RAGOrchestrator:
             reranker_config=reranker_config,
             chat_config=chat_config,
             mcp_tool_loader=mcp_tool_loader,
+            intersession_repo=intersession_repo,
+            intersession_max_summaries=(
+                intersession_config.max_summaries_per_prompt
+                if intersession_config else 5
+            ),
+            intersession_max_tokens=(
+                intersession_config.intersession_context_max_tokens
+                if intersession_config else 2000
+            ),
         )
 
         self._chat_service = chat_service

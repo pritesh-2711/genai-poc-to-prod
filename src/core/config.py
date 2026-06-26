@@ -7,7 +7,10 @@ from typing import Any, Dict
 import yaml
 
 from .exceptions import ConfigurationError
-from .models import ChatConfig, DBConfig, EmbeddingConfig, GuardrailsConfig, LLMConfig, MCPConfig, RerankerConfig, StorageConfig
+from .models import (
+    ChatConfig, ChunkScoringConfig, DBConfig, EmbeddingConfig, GuardrailsConfig,
+    IntersessionConfig, JobsConfig, LLMConfig, MCPConfig, RerankerConfig, StorageConfig,
+)
 
 
 class ConfigManager:
@@ -36,6 +39,7 @@ class ConfigManager:
         self.reranker_config = self._build_reranker_config()
         self.storage_config = self._build_storage_config()
         self.mcp_config = self._build_mcp_config()
+        self.jobs_config = self._build_jobs_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Load and parse the YAML configuration file.
@@ -274,6 +278,26 @@ class ConfigManager:
             transport="streamable-http",
             http_url=self._resolve_env_vars(http.get("url", "${MCP_SERVER_URL}")),
         )
+
+    def _build_jobs_config(self) -> JobsConfig:
+        """Build background jobs configuration from config file."""
+        jobs = self.config.get("jobs", {})
+
+        ics = jobs.get("intersession", {})
+        intersession = IntersessionConfig(
+            enabled=ics.get("enabled", True),
+            summary_interval_hours=ics.get("summary_interval_hours", 24),
+            max_summaries_per_prompt=ics.get("max_summaries_per_prompt", 5),
+            intersession_context_max_tokens=ics.get("intersession_context_max_tokens", 2000),
+        )
+
+        csc = jobs.get("chunk_scoring", {})
+        chunk_scoring = ChunkScoringConfig(
+            interval_hours=csc.get("interval_hours", 168),
+            rlhf_alpha=float(csc.get("rlhf_alpha", 0.2)),
+        )
+
+        return JobsConfig(intersession=intersession, chunk_scoring=chunk_scoring)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value by dot-separated key.

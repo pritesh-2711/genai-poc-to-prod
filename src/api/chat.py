@@ -38,7 +38,7 @@ from .deps import (
     get_pending_clarifications,
     get_repo,
 )
-from .schemas import ChatMessageResponse, SendMessageRequest, SendMessageResponse
+from .schemas import ChatMessageResponse, FeedbackRequest, FeedbackResponse, SendMessageRequest, SendMessageResponse
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -192,6 +192,7 @@ Handles workflow and agent turns, plus deep-workflow clarification resumes.
                 "tools_used": result.get("tools_used", []),
                 "agent_step_count": result.get("agent_step_count", 0),
                 "charts": charts,
+                "retrieved_chunk_ids": result.get("retrieved_chunk_ids", []),
             },
         )
         assistant_record.charts = charts
@@ -406,6 +407,7 @@ async def stream_message(
                         "tools_used": (result or {}).get("tools_used", []),
                         "agent_step_count": (result or {}).get("agent_step_count", 0),
                         "charts": charts,
+                        "retrieved_chunk_ids": (result or {}).get("retrieved_chunk_ids", []),
                     },
                 )
                 assistant_record.charts = charts
@@ -445,4 +447,47 @@ async def stream_message(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/messages/{chat_id}/feedback",
+    response_model=FeedbackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def submit_feedback(
+    session_id: UUID,
+    chat_id: UUID,
+    body: FeedbackRequest,
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
+    repo: Annotated[MemoryRepository, Depends(get_repo)],
+):
+    """Record thumbs-up / thumbs-down feedback on an assistant message.
+
+    Feedback is upserted (last rating wins per user per message).
+    The rating is also attributed to the retrieved chunks that produced the reply,
+    incrementing their RLHF quality score counters.
+    """
+    try:
+        feedback_id = repo.save_feedback(
+            chat_id=chat_id,
+            session_id=session_id,
+            user_id=current_user.user_id,
+            rating=body.rating,
+            comment=body.comment,
+        )
+        # Best-effort chunk attribution — log but don't fail the request
+        try:
+            repo.attribute_feedback_to_chunks(chat_id=chat_id, rating=body.rating)
+        except Exception as exc:
+            logger.warning(f"[feedback] chunk attribution failed (non-fatal): {exc}")
+
+    except MemoryRepositoryError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    return FeedbackResponse(
+        feedback_id=feedback_id,
+        chat_id=chat_id,
+        session_id=session_id,
+        rating=body.rating,
     )

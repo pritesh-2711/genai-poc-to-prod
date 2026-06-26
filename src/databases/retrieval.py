@@ -41,7 +41,17 @@ class PgVectorRetrievalRepository(BaseRetrievalRepository):
     All public methods are coroutines — use with await inside an async context.
     Each method opens and closes its own connection via try/finally to prevent
     connection leaks on exceptions.
+
+    Args:
+        db_config:   Database connection settings.
+        rlhf_alpha:  Weight [0, 1] for chunk quality score vs cosine similarity.
+                     Final score = (1 - alpha) * cosine + alpha * chunk_quality.
+                     Default 0.2 gives a light quality bias without dominating cosine.
     """
+
+    def __init__(self, db_config: DBConfig, rlhf_alpha: float = 0.2) -> None:
+        super().__init__(db_config)
+        self._rlhf_alpha = max(0.0, min(1.0, rlhf_alpha))
 
     async def _connect(self) -> asyncpg.Connection:
         return await asyncpg.connect(
@@ -85,35 +95,46 @@ class PgVectorRetrievalRepository(BaseRetrievalRepository):
         """
         vec_str = self._vec_str(query_embedding)
 
+        alpha = self._rlhf_alpha
+        # Weighted score: (1-alpha)*cosine + alpha*quality
+        # chunk_scores.score defaults to 0.5 (neutral) via COALESCE
         if session_id is not None:
             sql = """
                 SELECT
-                    id::text                                AS child_id,
-                    parent_id::text                        AS parent_id,
-                    chunk_content,
-                    filename,
-                    metadata,
-                    1 - (embeddings <=> $1::vector)        AS similarity
-                FROM poc2prod.ingestions
-                WHERE session_id = $2
-                ORDER BY embeddings <=> $1::vector
+                    i.id::text                                              AS child_id,
+                    i.parent_id::text                                       AS parent_id,
+                    i.chunk_content,
+                    i.filename,
+                    i.metadata,
+                    (1 - (i.embeddings <=> $1::vector))                    AS cosine_similarity,
+                    COALESCE(cs.score, 0.5)                                AS quality_score,
+                    (1 - $4::float) * (1 - (i.embeddings <=> $1::vector))
+                        + $4::float * COALESCE(cs.score, 0.5)             AS similarity
+                FROM poc2prod.ingestions i
+                LEFT JOIN poc2prod.chunk_scores cs ON cs.chunk_id = i.id
+                WHERE i.session_id = $2
+                ORDER BY similarity DESC
                 LIMIT $3;
             """
-            params = (vec_str, str(session_id), top_k)
+            params = (vec_str, str(session_id), top_k, alpha)
         else:
             sql = """
                 SELECT
-                    id::text                                AS child_id,
-                    parent_id::text                        AS parent_id,
-                    chunk_content,
-                    filename,
-                    metadata,
-                    1 - (embeddings <=> $1::vector)        AS similarity
-                FROM poc2prod.ingestions
-                ORDER BY embeddings <=> $1::vector
+                    i.id::text                                              AS child_id,
+                    i.parent_id::text                                       AS parent_id,
+                    i.chunk_content,
+                    i.filename,
+                    i.metadata,
+                    (1 - (i.embeddings <=> $1::vector))                    AS cosine_similarity,
+                    COALESCE(cs.score, 0.5)                                AS quality_score,
+                    (1 - $3::float) * (1 - (i.embeddings <=> $1::vector))
+                        + $3::float * COALESCE(cs.score, 0.5)             AS similarity
+                FROM poc2prod.ingestions i
+                LEFT JOIN poc2prod.chunk_scores cs ON cs.chunk_id = i.id
+                ORDER BY similarity DESC
                 LIMIT $2;
             """
-            params = (vec_str, top_k)
+            params = (vec_str, top_k, alpha)
 
         conn = await self._connect()
         try:

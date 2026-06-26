@@ -11,11 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..chat_service import ChatService
 from ..core.config import ConfigManager
+from ..databases.intersession import IntersessionRepository
+from ..databases.retrieval import PgVectorRetrievalRepository
 from ..embedding import LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
 from ..guardrails import InputGuard
+from ..jobs.scheduler import create_scheduler
 from ..mcp_client import MCPToolLoader
 from ..memory.repository import MemoryRepository
-from ..databases.retrieval import PgVectorRetrievalRepository
 from ..orchestrators import RAGOrchestrator
 from ..reranker import CrossEncoderReranker
 from .auth import router as auth_router
@@ -105,18 +107,36 @@ async def lifespan(app: FastAPI):
     mcp_tool_loader = MCPToolLoader(config.mcp_config)
     await mcp_tool_loader.connect()
 
+    # ── Intersession / RLHF repositories ─────────────────────────────────────
+    jobs_cfg = config.jobs_config
+    intersession_repo = IntersessionRepository(config.db_config)
+
     # ── RAGOrchestrator ───────────────────────────────────────────────────────
     orchestrator = RAGOrchestrator(
         embedder=embedder,
-        retrieval_repo=PgVectorRetrievalRepository(config.db_config),
+        retrieval_repo=PgVectorRetrievalRepository(
+            config.db_config,
+            rlhf_alpha=jobs_cfg.chunk_scoring.rlhf_alpha,
+        ),
         reranker=reranker,
         chat_service=chat_service,
         memory_repo=MemoryRepository(config.db_config),
         reranker_config=rr_cfg,
         chat_config=config.chat_config,
-        checkpointer=checkpointer,  # None → falls back to MemorySaver inside orchestrator
+        checkpointer=checkpointer,
         mcp_tool_loader=mcp_tool_loader,
+        intersession_repo=intersession_repo,
+        intersession_config=jobs_cfg.intersession,
     )
+
+    # ── Background job scheduler ──────────────────────────────────────────────
+    scheduler = create_scheduler(
+        jobs_config=jobs_cfg,
+        intersession_repo=intersession_repo,
+        chat_service=chat_service,
+        embedder=embedder,
+    )
+    scheduler.start()
 
     app.state.config = config
     app.state.chat_service = chat_service
@@ -125,6 +145,8 @@ async def lifespan(app: FastAPI):
     app.state.file_loader = file_loader
     app.state.pending_clarifications = pending_clarifications
     app.state.mcp_tool_loader = mcp_tool_loader
+    app.state.intersession_repo = intersession_repo
+    app.state.scheduler = scheduler
 
     logger.info(
         f"Application startup complete. "
@@ -132,9 +154,11 @@ async def lifespan(app: FastAPI):
         f"Embedder={emb_cfg.provider}/{emb_cfg.model}, "
         f"Reranker={rr_cfg.model}, "
         f"Storage={st_cfg.deployment}, "
-        f"MCP={config.mcp_config.transport if config.mcp_config.enabled else 'disabled'}"
+        f"MCP={config.mcp_config.transport if config.mcp_config.enabled else 'disabled'}, "
+        f"IntersessionMemory={'enabled' if jobs_cfg.intersession.enabled else 'disabled'}"
     )
     yield
+    scheduler.shutdown(wait=False)
     await mcp_tool_loader.disconnect()
     logger.info("Application shutdown.")
 
