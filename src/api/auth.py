@@ -6,6 +6,7 @@ POST /auth/signout — stateless logout (client discards token)
 GET  /auth/me      — return the authenticated user's profile
 """
 
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,12 +19,19 @@ from .schemas import SignInRequest, SignUpRequest, SignUpResponse, TokenResponse
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _is_admin(email: str) -> bool:
+    raw = os.getenv("ADMIN_EMAILS", "")
+    admin_emails = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    return email.lower() in admin_emails
+
+
 def _to_user_response(user: UserRecord) -> UserResponse:
     return UserResponse(
         user_id=user.user_id,
         name=user.name,
         email=user.email,
         created_at=user.created_at,
+        is_admin=_is_admin(user.email),
     )
 
 

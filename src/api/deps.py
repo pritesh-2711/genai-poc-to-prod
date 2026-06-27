@@ -16,6 +16,7 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from jose import JWTError, jwt
 
@@ -63,6 +64,16 @@ def get_orchestrator(request: Request) -> RAGOrchestrator:
 def get_pending_clarifications(request: Request) -> dict[str, str]:
     """Return the in-process pending-clarifications mapping (session_id → thread_id)."""
     return request.app.state.pending_clarifications
+
+
+def get_scheduler(request: Request) -> AsyncIOScheduler:
+    """Return the APScheduler instance stored at startup."""
+    return request.app.state.scheduler
+
+
+def get_job_history(request: Request) -> dict:
+    """Return the in-memory job-history dict updated by each background job."""
+    return request.app.state.job_history
 
 
 # ---------------------------------------------------------------------------
@@ -149,3 +160,21 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
+
+
+def require_admin(
+    current_user: Annotated[UserRecord, Depends(get_current_user)],
+) -> UserRecord:
+    """Raise 403 unless the current user's email is in the ADMIN_EMAILS env var.
+
+    Set ADMIN_EMAILS to a comma-separated list of admin email addresses, e.g.:
+        ADMIN_EMAILS=alice@example.com,bob@example.com
+    """
+    raw = os.getenv("ADMIN_EMAILS", "")
+    admin_emails = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    if current_user.email.lower() not in admin_emails:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return current_user

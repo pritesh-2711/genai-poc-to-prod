@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..chat_service import ChatService
 from ..core.config import ConfigManager
+from ..databases.admin import AdminRepository
 from ..databases.intersession import IntersessionRepository
 from ..databases.retrieval import PgVectorRetrievalRepository
 from ..embedding import LocalEmbedder, OllamaEmbedder, OpenAIEmbedder
@@ -20,6 +21,7 @@ from ..mcp_client import MCPToolLoader
 from ..memory.repository import MemoryRepository
 from ..orchestrators import RAGOrchestrator
 from ..reranker import CrossEncoderReranker
+from .admin import router as admin_router
 from .auth import router as auth_router
 from .chat import router as chat_router
 from .documents import router as documents_router
@@ -107,9 +109,11 @@ async def lifespan(app: FastAPI):
     mcp_tool_loader = MCPToolLoader(config.mcp_config)
     await mcp_tool_loader.connect()
 
-    # ── Intersession / RLHF repositories ─────────────────────────────────────
+    # ── Intersession / RLHF / Admin repositories ─────────────────────────────
     jobs_cfg = config.jobs_config
     intersession_repo = IntersessionRepository(config.db_config)
+    admin_repo = AdminRepository(config.db_config)
+    job_history: dict = {}
 
     # ── RAGOrchestrator ───────────────────────────────────────────────────────
     orchestrator = RAGOrchestrator(
@@ -132,9 +136,12 @@ async def lifespan(app: FastAPI):
     # ── Background job scheduler ──────────────────────────────────────────────
     scheduler = create_scheduler(
         jobs_config=jobs_cfg,
+        guardrails_config=config.guardrails_config,
         intersession_repo=intersession_repo,
+        admin_repo=admin_repo,
         chat_service=chat_service,
         embedder=embedder,
+        job_history=job_history,
     )
     scheduler.start()
 
@@ -146,6 +153,8 @@ async def lifespan(app: FastAPI):
     app.state.pending_clarifications = pending_clarifications
     app.state.mcp_tool_loader = mcp_tool_loader
     app.state.intersession_repo = intersession_repo
+    app.state.admin_repo = admin_repo
+    app.state.job_history = job_history
     app.state.scheduler = scheduler
 
     logger.info(
@@ -187,6 +196,7 @@ app.include_router(sessions_router)
 app.include_router(chat_router)
 app.include_router(upload_router)
 app.include_router(documents_router)
+app.include_router(admin_router)
 
 
 @app.get("/health", tags=["health"])

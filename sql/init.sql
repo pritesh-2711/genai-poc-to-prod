@@ -261,3 +261,28 @@ CREATE TABLE poc2prod.chunk_scores (
     score           FLOAT NOT NULL DEFAULT 0.5,
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+
+-- ============================================================================
+-- TABLE: governance_flags
+-- Per-assistant-message output safety scores computed by the output_guardrail
+-- background job.  One row per chat_id; upserted by the job.
+-- flagged=TRUE when toxicity > 0.5 or bias > 0.5 or faithfulness < 0.3.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS poc2prod.governance_flags (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    chat_id             UUID NOT NULL REFERENCES poc2prod.chats(chat_id) ON DELETE CASCADE,
+    session_id          UUID NOT NULL REFERENCES poc2prod.sessions(session_id) ON DELETE CASCADE,
+    toxicity_score      FLOAT NOT NULL DEFAULT 0.0,
+    bias_score          FLOAT NOT NULL DEFAULT 0.0,
+    faithfulness_score  FLOAT,          -- NULL when no retrieved context was available
+    flagged             BOOLEAN NOT NULL DEFAULT FALSE,
+    flag_reason         TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (chat_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_governance_flags_flagged    ON poc2prod.governance_flags(flagged);
+CREATE INDEX IF NOT EXISTS idx_governance_flags_session_id ON poc2prod.governance_flags(session_id);
+CREATE INDEX IF NOT EXISTS idx_governance_flags_created_at ON poc2prod.governance_flags(created_at DESC);
