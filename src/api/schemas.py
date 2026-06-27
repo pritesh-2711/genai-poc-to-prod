@@ -41,6 +41,7 @@ class UserResponse(BaseModel):
     name: str
     email: str
     created_at: datetime
+    is_admin: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -125,3 +126,123 @@ class UploadResponse(BaseModel):
     file_description: str = ""
     parent_chunks: int = 0
     child_chunks: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Admin — User management
+# ---------------------------------------------------------------------------
+
+class AdminUserResponse(BaseModel):
+    user_id: str
+    name: Optional[str]
+    email: str
+    status: str
+    created_at: datetime
+    last_login_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class AdminUserStatusRequest(BaseModel):
+    status: Literal["approved", "rejected"]
+
+
+# ---------------------------------------------------------------------------
+# Admin — Conversations
+# ---------------------------------------------------------------------------
+
+class AdminSessionResponse(BaseModel):
+    session_id: str
+    user_email: str
+    session_name: Optional[str]
+    is_active: bool
+    created_at: datetime
+    message_count: int
+    last_mode: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class AdminMessageResponse(BaseModel):
+    chat_id: str
+    sender: str
+    message: str
+    created_at: str
+    orchestrator_metadata: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Admin — Feedback & RLHF
+# ---------------------------------------------------------------------------
+
+class AdminFeedbackStats(BaseModel):
+    ratings_7d: int
+    positive_rate: int
+    rlhf_alpha: float
+
+
+class AdminChunkScore(BaseModel):
+    chunk_id: str
+    filename: str
+    positive_count: int
+    negative_count: int
+    score: float
+
+
+# ---------------------------------------------------------------------------
+# Admin — Governance
+# ---------------------------------------------------------------------------
+
+class AdminGovernanceFlag(BaseModel):
+    id: str
+    chat_id: str
+    session_id: str
+    toxicity_score: float
+    bias_score: float
+    faithfulness_score: Optional[float]
+    flagged: bool
+    flag_reason: Optional[str]
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Admin — Background jobs
+# ---------------------------------------------------------------------------
+
+class AdminJobStatus(BaseModel):
+    job_id: str
+    interval_hours: Optional[float]
+    next_run: Optional[str]
+    last_run: Optional[str]
+    status: Optional[str]   # "succeeded" | "failed" | "skipped" | None
+    detail: Optional[str]
+
+
+# ---------------------------------------------------------------------------
+# Admin — Knowledge base
+# ---------------------------------------------------------------------------
+
+class AdminDocumentResponse(BaseModel):
+    filename: str
+    file_description: str
+    file_type: str
+    parent_chunks: int
+    child_chunks: int
+    ingested_at: Optional[str]
+
+
+# ---------------------------------------------------------------------------
+# Admin — Overview
+# ---------------------------------------------------------------------------
+
+class AdminOverviewStats(BaseModel):
+    pending_approvals: int
+    flagged_responses: int
+    active_users_7d: int
+    job_failures_24h: int
+
+
+class AdminActivityEvent(BaseModel):
+    event_type: str   # "signup" | "flagged" | "job_run"
+    detail: Optional[str]
+    occurred_at: str
